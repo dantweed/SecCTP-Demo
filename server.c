@@ -18,10 +18,16 @@
 #include <gnutls/gnutls.h>
 #include <gnutls/dtls.h>
 
-#define KEYFILE "key.pem"
-#define CERTFILE "cert.pem"
-#define CAFILE "/etc/ssl/certs/ca-certificates.crt"
-#define CRLFILE "crl.pem"
+//#define KEYFILE "key.pem"
+//#define CERTFILE "cert.pem"
+//#define CAFILE "/etc/ssl/certs/ca-certificates.crt"
+//#define CRLFILE "crl.pem"
+
+#define KEYFILE "./certs/key.pem"
+#define CERTFILE "./certs/cert.pem"
+//#define CAFILE "./certs/ca-certificates.crt"
+#define CAFILE "./certs/cert.pem"
+#define CRLFILE "./certs/crl.pem"
 
 /* This is a sample DTLS echo server, using X.509 authentication.
  * Note that error checking is minimal to simplify the example.
