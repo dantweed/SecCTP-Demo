@@ -18,16 +18,10 @@
 #include <gnutls/gnutls.h>
 #include <gnutls/dtls.h>
 
-//#define KEYFILE "key.pem"
-//#define CERTFILE "cert.pem"
-//#define CAFILE "/etc/ssl/certs/ca-certificates.crt"
-//#define CRLFILE "crl.pem"
-
-#define KEYFILE "./certs/key.pem"
-#define CERTFILE "./certs/cert.pem"
-//#define CAFILE "./certs/ca-certificates.crt"
-#define CAFILE "./certs/cert.pem"
-#define CRLFILE "./certs/crl.pem"
+#define KEYFILE "./ca/service-key.pem"
+#define CERTFILE "./ca/cert.pem"
+#define CAFILE "./ca/ca-cert.pem"
+//#define CRLFILE "./certss2/crl.pem"
 
 /* This is a sample DTLS echo server, using X.509 authentication.
  * Note that error checking is minimal to simplify the example.
@@ -82,8 +76,8 @@ int main(void)
         gnutls_certificate_set_x509_trust_file(x509_cred, CAFILE,
                                                GNUTLS_X509_FMT_PEM);
 
-        gnutls_certificate_set_x509_crl_file(x509_cred, CRLFILE,
-                                             GNUTLS_X509_FMT_PEM);
+        //gnutls_certificate_set_x509_crl_file(x509_cred, CRLFILE,
+        //                                     GNUTLS_X509_FMT_PEM);
 
         ret =
             gnutls_certificate_set_x509_key_file(x509_cred, CERTFILE,
@@ -212,7 +206,7 @@ int main(void)
                  */
 
                 if (ret < 0) {
-                        fprintf(stderr, "Error in handshake(): %s\n",
+                        fprintf(stderr, "Error in handshake(%d): %s\n", ret,
                                 gnutls_strerror(ret));
                         gnutls_deinit(session);
                         continue;
@@ -235,7 +229,7 @@ int main(void)
                                         gnutls_strerror(ret));
                                 continue;
                         } else if (ret < 0) {
-                                fprintf(stderr, "Error in recv(): %s\n",
+                                fprintf(stderr, "Error in recv(%d): %s\n",ret,
                                         gnutls_strerror(ret));
                                 break;
                         }
