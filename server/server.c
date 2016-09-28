@@ -18,6 +18,8 @@
 #include <gnutls/gnutls.h>
 #include <gnutls/dtls.h>
 
+#include "../secctp.h"
+
 #define KEYFILE "./certs/service-key.pem"
 #define CERTFILE "./certs/cert.pem"
 #define CAFILE "./certs/ca-cert.pem"
