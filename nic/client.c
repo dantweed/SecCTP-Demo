@@ -43,7 +43,7 @@ int main(int argc, char *argv[]) {
 
         int ret, sd, port;        
 	char *server;
-	char *msg; 
+	char *msg = NULL; 
         /* connect to the peer */
 	if (argc == 1) {
 		printf("No server:port selected, using default: %s:PORT\n",SERVER);
@@ -73,32 +73,18 @@ int main(int argc, char *argv[]) {
         /* gnutls_dtls_set_timeouts(session, 1000, 60000); */
 	if (ret = dtls_connect() < 0)
 		return ret;
-
-	//char *start_line = (char*) malloc(100);
-	//for (int i = 0; i < 2; i++) {        
-		//if (i = 0)
-			//msg = MSG;
-		//else {
-			char *start_line = (char*) malloc(100);
-			msg = (char *) malloc(256);
-			if (start_line == NULL || msg == NULL) {
-				printf("malloc failed\n");
-				//break;
-			}
-			hello(start_line,INFO,VERSION);
-			secCTP_msg(msg,start_line,"header",MSG);
-			
-		}*/
-       		//if (ret = sendmessage(msg) <=0) {}
-			//break;		
 		
-        //}
-	if (msg != NULL) {
-		ret = sendmessage(msg) <=0
+	msg = (char *) malloc(MAX_SIZE);
+	generateReq(msg,INFO,"127.0.0.1:5557","headers1\r\n", "this is req another body");
+		
+	if (msg) {
+		ret = sendmessage(msg);
 		free(msg);
+		msg = NULL;
 	}
-	ret = gnutls_bye(session, GNUTLS_SHUT_WR);
 
+	ret = gnutls_bye(session, GNUTLS_SHUT_WR);
+	if (msg) free (msg);
     end:
 	cleanup(sd);        
 
