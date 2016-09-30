@@ -11,7 +11,9 @@
 	#define NULL 0
 #endif
 
-#define MAX_SIZE 256
+#define MAX_HEADER_SIZE 256
+
+#define lang "Accept-Language: en-gb, en\r\n" //Only accept engligh for now
 
 /* Some useful macros */
 #define phrase(status_code) (((status_code) == OK) ? "Ok": \
