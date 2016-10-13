@@ -31,4 +31,7 @@
 # Debug files
 *.dSYM/
 *.su
+
+#other
 *~
+*.txt
