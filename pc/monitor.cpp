@@ -20,9 +20,6 @@ using Tins::SnifferConfiguration;
 using Tins::TCPIP::Stream;
 using Tins::TCPIP::StreamFollower;
 
-// This example captures and follows TCP streams seen on port 80. It will
-// wait until both the client and server send data and then apply a regex
-// to both payloads, extrating some information and printing it.
 
 // Don't buffer more than 3kb of data in either request/response
 const size_t MAX_PAYLOAD = 3 * 1024;
@@ -51,7 +48,7 @@ void on_server_data(Stream& stream) {
         string response_code = string(server_match[1].first, server_match[1].second);
         // Now print them
         cout << method << " http://" << host << url << " -> " << response_code << endl;
-
+	
         // Once we've seen the first request on this stream, ignore it
         stream.ignore_client_data();
         stream.ignore_server_data();
