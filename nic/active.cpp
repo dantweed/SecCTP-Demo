@@ -62,8 +62,7 @@ int main(int argc, char* argv[]) {
 void on_new_connection(Stream& stream) {
     // Print some information about the new connection
     cout << " [+] New connection " << server_endpoint(stream) << endl;    
-    active.insert(stream.server_addr_v4());
-    
+    active.insert(stream.server_addr_v4());    
     
     //Only interested in the connections, not interested in the data
     stream.ignore_server_data();
@@ -87,6 +86,7 @@ string server_endpoint(const Stream& stream) {
     
     return output.str();
 }
+
 
 
 
