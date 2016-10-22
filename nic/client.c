@@ -19,8 +19,9 @@
 #include "../secctp.h"
 
 #define CHECK(x) assert((x)>=0)
-#define PORT  5557
-#define SERVER  "127.0.0.1"
+#define SECCTPPORT  5557
+#define LISTENPORT 5555
+#define SECCTPSERVER  "127.0.0.1"
 
 #define MAX_BUF 1024
 
@@ -36,106 +37,161 @@ int udp_connect(int port, const char *server);
 int initgnutls(void);
 void cleanup(int sd);
 int dtls_connect(void);
-int sendmessage(char *msg) ;
+int sendmessage(char *msg, char *resp);
+
+int processSecCTP();
+
 extern int verify_certificate_callback(gnutls_session_t session);
 
+int secCTPport;
+char *secCTPserver;
+
+#define on_error(...) {fprintf(stderr, __VA_ARGS__); fflush(stderr); exit(1);}
+
 int main(int argc, char *argv[]) {
-
-        int ret, sd, port;        
-	char *server;
-	char *msg = NULL; 
-        /* connect to the peer */
-	if (argc == 1) {
-		printf("No server:port selected, using default: %s:PORT\n",SERVER);
-		port = PORT;
-		server = SERVER;
+	
+	int parentfd;
+	int childfd;
+	int optval;
+	socklen_t clientlen;
+	int n;	
+	
+	int portno = LISTENPORT;  
+	char buf[MAX_BUF];
+	struct sockaddr_in serveraddr;
+	struct sockaddr_in clientaddr; 
+	/* validate args before bothering with anything else */
+	
+	if (argc == 1) {  //Used for debug on local machine only 
+		printf("No server:port selected, using default: %s:%d\n",SECCTPSERVER,SECCTPPORT);
+		secCTPport = SECCTPPORT;
+		secCTPserver = SECCTPSERVER;
 	} else if (argc != 3) {
-	        printf("ERROR: Incorrect number of parameters.\n");
-		printf("Correct usage is no parameters for default (%s:PORT) or\n",SERVER);
-		printf("\t%s <server> <port>\n",argv[0]);
-		exit(1);
+	    on_error("Usage is %s <SecCTP server> <SecCTP port>\n",argv[0]);		
 	} else {
-		port = atoi(argv[2]);
-		server = argv[1];
+		secCTPport = atoi(argv[2]);
+		secCTPserver = argv[1];
 	}
 	
-	if (initgnutls() < 0) {
-		fprintf(stderr, "*** Error initializing gnutls.");
-		goto end;
+	/* set up tcp server socket */
+	if ( (parentfd = socket(AF_INET, SOCK_STREAM, 0)) < 0) 
+		on_error("*** Error opening socket for tcp server");
+		
+	
+	optval = 1;
+	setsockopt(parentfd, SOL_SOCKET, SO_REUSEADDR, (const void *)&optval , sizeof(int));
+
+	bzero((char *) &serveraddr, sizeof(serveraddr));  
+	
+	/* Bind to whatever our IP address is and selected port */
+	serveraddr.sin_family = AF_INET;  
+	serveraddr.sin_addr.s_addr = htonl(INADDR_ANY);  
+	serveraddr.sin_port = htons((unsigned short)portno);
+	if (bind(parentfd, (struct sockaddr *) &serveraddr, sizeof(serveraddr)) < 0) 
+		on_error("ERROR on binding");
+	
+	/* If everything else checks out, try initializing gnutls*/
+
+	if (initgnutls() < 0) 
+		on_error("*** Error initializing gnutls.");
+	
+	
+	if (listen(parentfd, 1) < 0)  /* only accept one connection at a time */ 
+		on_error("ERROR on listen");
+	
+	
+	/* Main loop */
+	while (1) { /* Always be listening */ 	
+		clientlen = sizeof(clientaddr);
+		if ( (childfd = accept(parentfd, (struct sockaddr *) &clientaddr, &clientlen)) < 0) 
+			on_error("ERROR on accept");	
+		if ( (n = read(childfd, buf, MAX_BUF)) < 0) 
+			on_error("Error on read");
+	
+	/* On accept, get request details and then close connection */
+	
+	/* Validate session, then server in request via DNS, then call functions for SecCTP transaction */ 
+	
 	}
 	
-	sd = udp_connect(port, server);
+	return EXIT_SUCCESS;
+}
 
-        gnutls_transport_set_int(session, sd);
-
+int processSecCTP() { /*should be done as a FSM to complete all steps of secctp trasnaction */
+	char resp[MAX_BUF+1];
+	char *msg;
+	int secCTPsd;
+	int ret;
+	
+	/* Set up upd connection and DTLS */
+	secCTPsd = udp_connect(secCTPport, secCTPserver);    
+	gnutls_transport_set_int(session, secCTPsd);
         /* set the connection MTU */
-        gnutls_dtls_set_mtu(session, 1000);
+    gnutls_dtls_set_mtu(session, 1000);
         /* gnutls_dtls_set_timeouts(session, 1000, 60000); */
-	if (ret = dtls_connect() < 0)
+	if ( (ret = dtls_connect()) < 0)
 		return ret;
-		
-	msg = (char *) malloc(MAX_SIZE);
-	generateReq(msg,INFO,"127.0.0.1:5557","headers1\r\n", "this is req another body");
-		
+	
+	msg = (char*)malloc(MAX_BUF);
 	if (msg) {
-		ret = sendmessage(msg);
+		ret = sendmessage(msg, resp);
 		free(msg);
 		msg = NULL;
 	}
 
-	ret = gnutls_bye(session, GNUTLS_SHUT_WR);
-	if (msg) free (msg);
-    end:
-	cleanup(sd);        
 
-        return ret;
+	/* clean up and close */ 
+    
+	ret = gnutls_bye(session, GNUTLS_SHUT_WR);
+	if (msg) free (msg);    
+ 
+	cleanup(secCTPsd);        
+
+	/* needs to "return" outcome of the transaction to user pc */
+    return ret;
 }
+
 
 int dtls_connect(){
 	int ret;
  	/* Perform the TLS handshake */
-        do {
-                ret = gnutls_handshake(session);
-        }
-        while (ret == GNUTLS_E_INTERRUPTED || ret == GNUTLS_E_AGAIN);
-        /* Note that DTLS may also receive GNUTLS_E_LARGE_PACKET */
+	/* block until connected */
+	do {
+		ret = gnutls_handshake(session);
+	}
+	while (ret == GNUTLS_E_INTERRUPTED || ret == GNUTLS_E_AGAIN);
+	
+	/* Note that DTLS may also receive GNUTLS_E_LARGE_PACKET */
 
-        if (ret < 0) {
-                fprintf(stderr, "*** Handshake failed\n");
-                gnutls_perror(ret);
-        } else {
-                char *desc;
+	if (ret < 0) {
+		fprintf(stderr, "*** Handshake failed\n");
+		gnutls_perror(ret);
+	} else {
+		char *desc;
 
-                desc = gnutls_session_get_desc(session);
-                printf("- Session info: %s\n", desc);
-                gnutls_free(desc);
-        }
+		desc = gnutls_session_get_desc(session);
+		printf("- Session info: %s\n", desc);
+		gnutls_free(desc);
+	}
 	return ret;
 }	
 
-int sendmessage(char *msg) {
-	int ret;
-	char buffer[MAX_BUF + 1];
+int sendmessage(char *msg, char *resp) {
+	int ret;	
+
+	CHECK(gnutls_record_send(session, msg, strlen(msg)));
+
+	ret = gnutls_record_recv(session, resp, MAX_BUF);
 	
-
-        CHECK(gnutls_record_send(session, msg, strlen(msg)));
-
-        ret = gnutls_record_recv(session, buffer, MAX_BUF);
-        if (ret == 0) {
-                printf("- Peer has closed the TLS connection\n");                
-        } else if (ret < 0 && gnutls_error_is_fatal(ret) == 0) {
-                fprintf(stderr, "*** Warning: %s\n", gnutls_strerror(ret));
-        } else if (ret < 0) {
-                fprintf(stderr, "*** Error: %s\n", gnutls_strerror(ret));
-        } else if (ret > 0) {
-		printf("- Received %d bytes: ", ret);
-		for (int ii = 0; ii < ret; ii++) {
-		        fputc(buffer[ii], stdout);
-		}
-		fputs("\n", stdout);
-        }
-
-    
+	if (ret == 0) 
+		printf("- Peer has closed the TLS connection\n");                
+	else if (ret < 0 && gnutls_error_is_fatal(ret) == 0) 
+		fprintf(stderr, "*** Warning: %s\n", gnutls_strerror(ret));
+	else if (ret < 0) 
+		fprintf(stderr, "*** Error: %s\n", gnutls_strerror(ret));
+	else if (ret > 0)
+		printf("- Received %d bytes: ", ret);	
+	
 	return ret;
 }
 
@@ -145,9 +201,9 @@ void cleanup(int sd) {
 
 	gnutls_deinit(session);
 
-        gnutls_certificate_free_credentials(xcred);
+    gnutls_certificate_free_credentials(xcred);
 
-        gnutls_global_deinit();
+    gnutls_global_deinit();
 }
 
 int initgnutls(){
@@ -182,6 +238,8 @@ int initgnutls(){
 	return ret;
 
 }
+
+/* UDP helper function */ 
 
 int udp_connect(int port, const char *server)
 {
