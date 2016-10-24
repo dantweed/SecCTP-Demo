@@ -1,4 +1,4 @@
-/*Basis/reference-- not functional*/
+/*Basis/reference example*/
 
 #ifdef HAVE_CONFIG_H
 #include <config.h>
