@@ -1,4 +1,4 @@
-/* Based on example code from the gnutls project. */
+/* Single-threaded for now*/
 
 #ifdef HAVE_CONFIG_H
 #include <config.h>
@@ -16,18 +16,18 @@
 #include <gnutls/gnutls.h>
 #include <gnutls/dtls.h>
 
-#include "../secctp.h"
+#include "../secctp.h" //Message definitions, etc 
 
-#define CHECK(x) assert((x)>=0)
+#define on_error(...) {fprintf(stderr, __VA_ARGS__); fflush(stderr); exit(1);}
+
+#define LISTENPORT 5555 	//For incoming notifications from User PC
+//defaults for testing
 #define SECCTPPORT  5557
-#define LISTENPORT 5555
-#define SECCTPSERVER  "127.0.0.1"
+#define SECCTPSERVER  "127.0.0.1" 
 
 #define MAX_BUF 1024
 
 #define CAFILE "./certs/cert.pem"
-
-#define MSG "GET / HTTP/1.0\r\n\r\n"
 
 gnutls_session_t session;
 gnutls_certificate_credentials_t xcred;
@@ -39,14 +39,12 @@ void cleanup(int sd);
 int dtls_connect(void);
 int sendmessage(char *msg, char *resp);
 
-int processSecCTP();
+int processSecCTP(struct *sockaddr_in serveraddr);
 
 extern int verify_certificate_callback(gnutls_session_t session);
 
 int secCTPport;
 char *secCTPserver;
-
-#define on_error(...) {fprintf(stderr, __VA_ARGS__); fflush(stderr); exit(1);}
 
 int main(int argc, char *argv[]) {
 	
@@ -60,6 +58,7 @@ int main(int argc, char *argv[]) {
 	char buf[MAX_BUF];
 	struct sockaddr_in serveraddr;
 	struct sockaddr_in clientaddr; 
+	struct sockaddr_in secCTPserver;
 	/* validate args before bothering with anything else */
 	
 	if (argc == 1) {  //Used for debug on local machine only 
@@ -108,16 +107,19 @@ int main(int argc, char *argv[]) {
 		if ( (n = read(childfd, buf, MAX_BUF)) < 0) 
 			on_error("Error on read");
 	
-	/* On accept, get request details and then close connection */
-	
-	/* Validate session, then server in request via DNS, then call functions for SecCTP transaction */ 
-	
+	/* TODO: On accept, get request details and */
+	//build sockaddr_in from message (if valid, otherwise log and drop)
+	/* TODO: Validate session, then server in request via DNS, call functions for SecCTP transaction */ 
+	ret = processSecCTP(&secCTPserver); //ret will be outcome of secctp trans in a defined struct
 	}
 	
 	return EXIT_SUCCESS;
 }
 
-int processSecCTP() { /*should be done as a FSM to complete all steps of secctp trasnaction */
+
+/*will be refactored as a step-based fsm to complete all steps of secctp trasnaction */
+/*will assume for now only a single trasnactions (i.e. is blocking) */
+int processSecCTP(struct sockaddr_in *serveraddr) { 
 	char resp[MAX_BUF+1];
 	char *msg;
 	int secCTPsd;
@@ -179,9 +181,10 @@ int dtls_connect(){
 int sendmessage(char *msg, char *resp) {
 	int ret;	
 
-	CHECK(gnutls_record_send(session, msg, strlen(msg)));
-
-	ret = gnutls_record_recv(session, resp, MAX_BUF);
+	//send	
+	ret =  gnutls_record_send(session, msg, strlen(msg));
+	if (ret >= 0)  //If successful, receive
+		ret = gnutls_record_recv(session, resp, MAX_BUF);
 	
 	if (ret == 0) 
 		printf("- Peer has closed the TLS connection\n");                
@@ -195,19 +198,16 @@ int sendmessage(char *msg, char *resp) {
 	return ret;
 }
 
-void cleanup(int sd) {
-	
+void cleanup(int sd) {	
 	if (sd > 0) close(sd);
-
 	gnutls_deinit(session);
-
-    gnutls_certificate_free_credentials(xcred);
-
-    gnutls_global_deinit();
+	gnutls_certificate_free_credentials(xcred);
+	gnutls_global_deinit();
 }
 
 int initgnutls(){
 	int ret;
+
 	if (gnutls_check_version("3.1.4") == NULL) {
                 fprintf(stderr, "GnuTLS 3.1.4 or later is required.\n");
                 exit(1);
@@ -216,10 +216,10 @@ int initgnutls(){
         /* for backwards compatibility with gnutls < 3.3.0 */
         ret = gnutls_global_init();
 	if (ret < 0)  return ret;
-        /* X509 stuff */
+        /* Set up X.509 stuff */
         ret = gnutls_certificate_allocate_credentials(&xcred);
 	if (ret < 0)  return ret;
-        /* sets the trusted cas file */
+        /* Set the trusted cas file */
         ret = gnutls_certificate_set_x509_trust_file(xcred, CAFILE,GNUTLS_X509_FMT_PEM);
 	if (ret < 0)  return ret;
         /* Initialize TLS session */
@@ -228,7 +228,7 @@ int initgnutls(){
         /* Use default priorities */
         ret = gnutls_set_default_priority(session);
 	if (ret < 0)  return ret;
-        /* put the x509 credentials to the current session */
+        /* Set the X.509 credentials to the current session */
         ret = gnutls_credentials_set(session, GNUTLS_CRD_CERTIFICATE, xcred);
 	if (ret < 0)  return ret;
         ret = gnutls_server_name_set(session, GNUTLS_NAME_DNS, "localhost",strlen("localhost"));
@@ -239,8 +239,7 @@ int initgnutls(){
 
 }
 
-/* UDP helper function */ 
-
+/* UDP helper function from gnutls example*/ 
 int udp_connect(int port, const char *server)
 {
         
