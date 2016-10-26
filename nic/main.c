@@ -28,11 +28,20 @@ extern int verify_certificate_callback(gnutls_session_t session);
 
 extern int udp_connect(int port, const char *server);
 extern void udp_close(int sd);
-int sysinit(gnutls_session_t session, gnutls_certificate_credentials_t xcred);
 
-int sysinit(gnutls_session_t session, gnutls_certificate_credentials_t xcred) {
-	/* gnutls init stuff */
-    if (gnutls_check_version("3.1.4") == NULL) {
+
+int main(int argc, char *argv[])
+{
+        int ret, sd, ii;
+        gnutls_session_t session;
+        char buffer[MAX_BUF + 1];
+        gnutls_certificate_credentials_t xcred;
+
+		int port = atoi(argv[2]);
+		char *server = argv[1];
+
+		
+if (gnutls_check_version("3.1.4") == NULL) {
             fprintf(stderr, "GnuTLS 3.1.4 or later is required for this example\n");
             exit(1);
     }
@@ -59,25 +68,9 @@ int sysinit(gnutls_session_t session, gnutls_certificate_credentials_t xcred) {
                                  strlen("localhost")));
 
     gnutls_session_set_verify_cert(session, "localhost", 0);
-
-	return 0;
-}
-
-int main(int argc, char *argv[])
-{
-        int ret, sd, ii;
-        gnutls_session_t session;
-        char buffer[MAX_BUF + 1];
-        gnutls_certificate_credentials_t xcred;
-
-		int port = atoi(argv[2]);
-		char *server = argv[1];
-
-		ret = sysinit(session, xcred);
-
         /* connect to the peer */
         sd = udp_connect(port, server);
-		printf("sd = %d\n", sd);
+		
         gnutls_transport_set_int(session, sd);
 
         /* set the connection MTU */
@@ -86,7 +79,7 @@ int main(int argc, char *argv[])
 
         /* Perform the TLS handshake */
         do {
-			printf("in do\n");
+			
 			ret = gnutls_handshake(session);
         }
         while (ret == GNUTLS_E_INTERRUPTED || ret == GNUTLS_E_AGAIN);
