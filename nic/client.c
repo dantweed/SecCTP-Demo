@@ -80,6 +80,8 @@ int main(int argc, char *argv[]) {
 	struct sockaddr_in serveraddr;
 	struct sockaddr_in clientaddr; 	
 	
+	struct sigaction act;
+	
 	serverDetails secCTPserver; 
 	
 	struct mq_attr attr;	
@@ -97,12 +99,16 @@ int main(int argc, char *argv[]) {
 		/* Set up mqueue and launch active.cpp */ 
 		if ( (mq = mq_open(QUEUE, O_RDWR | O_CREAT, 0644, &attr)) == (mqd_t) -1) 
 			on_error("Error opening queue");		
-		if (fork() == 0) { /* If queue is open, run monitor app in a separate process */
-			execl("active.exe", QUEUE, (char*) NULL);
+		if (fork() == 0) { /* If queue is open, run monitor app in a separate process */	
+			if ( (execl("active.exe", "active.exe", argv[1], QUEUE, (char*) NULL)) < 0) 
+				on_error("Error openning active monitor");
 		}		
-	}
+	}	
 	
-	signal(SIGINT, sigHandler);
+	memset(&act, '\0', sizeof(act));
+	act.sa_handler = &sigHandler;
+	if ( ( sigaction(SIGINT, &act, NULL)) < 0)
+		on_error("Error handling signal");
 	/* set up tcp server socket */
 	if ( (parentfd = socket(AF_INET, SOCK_STREAM, 0)) < 0) 
 		on_error("*** Error opening socket for tcp server");	
@@ -127,30 +133,35 @@ int main(int argc, char *argv[]) {
 	/* Main loop */
 	clientlen = sizeof(clientaddr);	
 	while (forever) { /* Always be listening */ 	  //TODO: make multi-threaded for handling server initiated requests		
-		if ( (childfd = accept(parentfd, (struct sockaddr *) &clientaddr, &clientlen)) < 0) 
-			on_error("ERROR on accept");	
-	/* On accept, get request details */	
-		if ( (n = read(childfd, buf, MAX_BUF)) < 0) 
-			on_error("Error on read");
-	/* Validate session, then server in request via DNS, call functions for SecCTP transaction */ 
-		if ( (ret = parseUserPCmsg(&secCTPserver,buf) != MSG_TOKENS)) 
-			on_error("Invalid message from User PC");
-		if ( (ret = validateServer(&secCTPserver) != 0)) 
-			on_error("Invalid server or request");
 		
-		close(childfd);
-		//Outcome of SecCTP transaction
-		if ( (ret = processSecCTP(&secCTPserver)) < 0) 
-			break; //error condition
+		if ( (childfd = accept(parentfd, (struct sockaddr *) &clientaddr, &clientlen)) < 0 && forever) 
+			on_error("ERROR on accept");	
+		if (forever && childfd > 0) { //Covers case of sig interupt out of accept block
+		/* On accept, get request details */	
+			if ((n = read(childfd, buf, MAX_BUF)) < 0) 
+				on_error("Error on read");
+		/* Validate session, then server in request via DNS, call functions for SecCTP transaction */ 
+			if ( (ret = parseUserPCmsg(&secCTPserver,buf) != MSG_TOKENS)) 
+				on_error("Invalid message from User PC");
+			if ((ret = validateServer(&secCTPserver) != 0)) 
+				on_error("Invalid server or request");
+			
+			//Outcome of SecCTP transaction
+			if (forever && (ret = processSecCTP(&secCTPserver)) < 0) 
+				break; //error condition
+			
+			close(childfd);
+			childfd = 0;
+		}
 		
 	}
-	/* Send kill to active */
+	/* Send kill to active.cpp application  */
 	mq_send(mq, MSG_DIE, MAX_SIZE, 0);
-	
+
 	/* Clean up */ 	
 	mq_close(mq);
-    mq_unlink(QUEUE);
-    close(parentfd);
+	mq_unlink(QUEUE);
+	close(parentfd);
     dtls_deinit();
 	
 	return EXIT_SUCCESS;
@@ -379,8 +390,7 @@ int dtls_connect(serverDetails *secCTPserver){
 	} else {
 		/* For debugging */
 		char *desc;		
-		desc = gnutls_session_get_desc(session);
-		printf("- Session info: %s\n", desc);
+		desc = gnutls_session_get_desc(session);		
 		gnutls_free(desc);
 		/* */		
 		ret = secCTPsd;
@@ -395,15 +405,11 @@ int sendDTLSmessage(char *msg, char *resp) {
 	if (ret >= 0)  //If successful, receive response
 		ret = gnutls_record_recv(session, resp, MAX_BUF);
 	
-	if (ret == 0) 
-		printf("- Peer has closed the TLS connection\n");                
-	else if (ret < 0 && gnutls_error_is_fatal(ret) == 0) 
+	if (ret < 0 && gnutls_error_is_fatal(ret) == 0) 
 		fprintf(stderr, "*** Warning: %s\n", gnutls_strerror(ret));
 	else if (ret < 0) 
 		fprintf(stderr, "*** Error: %s\n", gnutls_strerror(ret));
-	else if (ret > 0)
-		printf("- Received %d bytes: ", ret);	
-	
+		
 	return ret;
 }
 
@@ -441,7 +447,7 @@ int initgnutls(){
 
 /* clean and close gnutls stuff */
 void dtls_deinit() {
-	gnutls_deinit(session);
+	if (session) gnutls_deinit(session);
 	gnutls_certificate_free_credentials(xcred);
 	gnutls_global_deinit();
 }
