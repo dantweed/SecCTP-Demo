@@ -60,11 +60,10 @@ int main(int argc, char* argv[]) {
         config.set_filter("tcp port 80");        
         Sniffer sniffer(argv[1], config);
 		
-        cout << "Starting capture on interface t" << argv[1] << endl;
+        cout << "Starting capture on interface " << argv[1] << endl;
 		//Create and join the thread and main
 		if (pthread_create(&thread, NULL, monitor, (void *)&sniffer))
-			return EXIT_FAILURE;        
-        		
+			return EXIT_FAILURE;        	
         //Inf loop until kill received from top level applicationi
         while (1) {
 			//block on reading mqueue, act on message rec'd
@@ -91,7 +90,7 @@ int main(int argc, char* argv[]) {
 }
 
 void *monitor(void *args){
-	// construct the stream follower and run forever
+	// construct the stream follower and run forever	
 	Sniffer *sniffer = (Sniffer*)args;
 	StreamFollower follower;
 	follower.new_stream_callback(&on_new_connection);        
@@ -104,7 +103,7 @@ void *monitor(void *args){
 
 void on_new_connection(Stream& stream) {
     //Add new connect to list
-    active.insert(stream.server_addr_v4());    
+    active.insert(stream.server_addr_v4());     
     
     //Only interested in the connections, not interested in the data
     stream.ignore_server_data();
