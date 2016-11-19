@@ -32,7 +32,7 @@ using Tins::TCPIP::StreamFollower;
 using Tins::IPv4Address;
 
 
-#define PROCESSING 302  //102 when not testing
+#define PROCESSING 102
 
 // Don't buffer more than 3kb of data in either request/response
 const size_t MAX_PAYLOAD = 3 * 1024;
@@ -41,7 +41,7 @@ const size_t MAX_PAYLOAD = 3 * 1024;
  //Get the message code
 regex code_regex("HTTP/[^ ]+ ([\\d]+)");
  //Search for SecCTP URI (assume hostname is same as main server, extract from active stream)
-//regex uri_regex("SecCTP-URI: ((?:\"[^\"\n]*\"|[^\r\n])*)");  //format hostname:port per RFC 3986
+regex uri_regex("SecCTP-URI: ((?:\"[^\"\n]*\"|[^\r\n])*)");  //format hostname:port per RFC 3986
 
 //For testing and later, extracting all http headers
 regex headers_regex("((?:\"[^\"\n]*\"|[^:,\n])*):((?:\"[^\"\n]*\"|[^,\n])*)");
@@ -109,11 +109,10 @@ int signalNIC(string server_addr, string uri) {
 		cerr << "ERROR connecting to server " << endl;
 		
 	} else {
-		//Build msg		
-		oss << "Stream-Address:" << server_addr << "\n";
-		oss << "SecCTP-Address:" << uri.substr(0,uri.find(delim)) << "\n";
-		oss << "SecCTP-Port:" << uri.substr(uri.find(delim)+1) << "\n";		
-		msg = oss.str();		
+		/* Build msg, msg format to be hostname/resource-ipaddress:port (i.e. three tokens)*/	
+		//URI from headers will be hostname/resource:port
+		oss << uri.substr(0,uri.find(delim)) << "-" << server_addr << ":" << uri.substr(uri.find(delim)+1) << "\n";
+		msg = oss.str();
 		
 		//Send msg
 		wc = write(sockfd, msg.data(), msg.length());		
@@ -135,12 +134,12 @@ void on_server_data(Stream& stream) {
     bool valid = regex_search(server_payload.begin(), server_payload.end(),
                               server_match, code_regex) && 
                  regex_search(server_payload.begin(), server_payload.end(),
-							client_match, headers_regex);//uri_regex);
+							client_match,headers_regex);// uri_regex);
 	
     if (valid) {   		
         string response_code = string(server_match[1].first, server_match[1].second);        		
 		string secCTP_uri = string(client_match[1].first, client_match[1].second);
-
+	cout << "resp = " << response_code << "  uri= " << secCTP_uri << endl;
 		if (std::stoi(response_code) == PROCESSING) {
 			IPv4Address server_addr = stream.server_addr_v4();
 			cout << server_addr.to_string() << endl;			
@@ -156,8 +155,7 @@ void on_server_data(Stream& stream) {
     }
 }
 
-void on_new_connection(Stream& stream) {
-	
+void on_new_connection(Stream& stream) {	
     stream.ignore_client_data(); //Only monitoring server messages for now
     stream.server_data_callback(&on_server_data);	
     stream.auto_cleanup_payloads(true); //No need to buffer the data

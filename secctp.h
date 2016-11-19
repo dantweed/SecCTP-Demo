@@ -11,11 +11,13 @@
 	#define NULL 0
 #endif
 
-#define MAX_HEADER_SIZE 256
 
-#define lang "Accept-Language: en-gb, en\r\n" //Only accept engligh for now
+#define MAX_HEADER_SIZE 8096 //8K is Apache max, others 16K (much larger than needed, optimize later)
 
-/* Some useful macros */
+#define DATE_FORMAT "Date: %a, %d %b %Y %H:%M:%S %Z\r\n"
+#define LANG "Accept-Language: en-gb, en\r\n" //Only accept engligh for now
+
+/* Some macros */
 #define phrase(status_code) (((status_code) == OK) ? "Ok": \
 		((status_code) == OTHER) ? "See Other" : \
 		((status_code) == BAD) ? "Bad Request" : \
@@ -50,8 +52,24 @@
 #define SERVER_ERR 500
 #define NOT_IMPL 501
 
-#endif //#ifndef SECCTP_H
+typedef enum msgType {HELLO=0,REQ, RESP} msgType;
+
+typedef struct msgContents{
+	msgType type; 	
+	char * headers;
+	char * body;
+	char * method;	
+	char * version;
+	int status;		
+	char * resource;	
+} msgContents;
 
 int generateHello(char *msg, char *method,char *headers, char *body);
 int generateReq(char *msg, char *method, char *uri,char *headers, char *body); 
 int generateResp(char *msg, int status_code,char *headers, char *body);
+
+int parseMessage(msgContents *contents, char *msg);
+
+#endif //#ifndef SECCTP_H
+
+
