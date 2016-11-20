@@ -1,4 +1,3 @@
-/* This example code is placed in the public domain. */
 
 #ifdef HAVE_CONFIG_H
 #include <config.h>
@@ -25,12 +24,11 @@
 #define CAFILE "./certs/ca-cert.pem"
 
 
-/* This is a sample DTLS echo server, using X.509 authentication.
- * Note that error checking is minimal to simplify the example.
- */
-
-#define MAX_BUFFER 1024
+#define MAX_BUF 1024
 #define PORT 5557
+#define DONE -1
+
+#define on_error(...) {fprintf(stderr, __VA_ARGS__); fflush(stderr); return EXIT_FAILURE;}
 
 typedef struct {
         gnutls_session_t session;
@@ -38,6 +36,7 @@ typedef struct {
         struct sockaddr *cli_addr;
         socklen_t cli_addr_size;
 } priv_data_st;
+
 
 static int pull_timeout_func(gnutls_transport_ptr_t ptr, unsigned int ms);
 static ssize_t push_func(gnutls_transport_ptr_t p, const void *data,
@@ -49,226 +48,317 @@ static const char *human_addr(const struct sockaddr *sa, socklen_t salen,
 static int wait_for_connection(int fd);
 static int generate_dh_params(void);
 
-/* Use global credentials and parameters to simplify
- * the example. */
+/* Use global credentials and parameters to simplify implementation */
 static gnutls_certificate_credentials_t x509_cred;
 static gnutls_priority_t priority_cache;
 static gnutls_dh_params_t dh_params;
+gnutls_session_t session;
+gnutls_datum_t cookie_key;
 
-int main(void)
+static volatile int forever = 1;
+int secCTPstep;
+
+int initgnutls();
+int processSecCTP(int sock);
+void sigHandler(int sig);
+
+int main(int argc, char **argv)
 {
-        int listen_sd;
-        int sock, ret;
-        struct sockaddr_in sa_serv;
-        struct sockaddr_in cli_addr;
-        socklen_t cli_addr_size;
-        gnutls_session_t session;
-        char buffer[MAX_BUFFER];
-        priv_data_st priv;
-        gnutls_datum_t cookie_key;
-        gnutls_dtls_prestate_st prestate;
-        int mtu = 1400;
-        unsigned char sequence[8];
+	int listen_sd;
+	int sock, port;
+	struct sockaddr_in sa_serv;
 
-        /* this must be called once in the program
-         */
-        gnutls_global_init();
+	if (argc != 2) 
+		port = PORT;
+	else 
+		port = atoi(argv[1]);	
+	
+	/* Try initializing gnutls*/
+	if (initgnutls() < 0) 
+		on_error("*** Error initializing gnutls.");	
+	
+	/* Socket operations */
+	listen_sd = socket(AF_INET, SOCK_DGRAM, 0);
 
-        gnutls_certificate_allocate_credentials(&x509_cred);
-        gnutls_certificate_set_x509_trust_file(x509_cred, CAFILE,
-                                               GNUTLS_X509_FMT_PEM);
+	memset(&sa_serv, '\0', sizeof(sa_serv));
+	sa_serv.sin_family = AF_INET;
+	sa_serv.sin_addr.s_addr = INADDR_ANY;
+	sa_serv.sin_port = htons(port);
 
-        //gnutls_certificate_set_x509_crl_file(x509_cred, CRLFILE,
-        //                                     GNUTLS_X509_FMT_PEM);
-
-        ret =
-            gnutls_certificate_set_x509_key_file(x509_cred, CERTFILE,
-                                                 KEYFILE,
-                                                 GNUTLS_X509_FMT_PEM);
-        if (ret < 0) {
-                printf("No certificate or key were found\n");
-                exit(1);
-        }
-
-        generate_dh_params();
-
-        gnutls_certificate_set_dh_params(x509_cred, dh_params);
-
-        gnutls_priority_init(&priority_cache,
-                             "PERFORMANCE:-VERS-TLS-ALL:+VERS-DTLS1.0:%SERVER_PRECEDENCE",
-                             NULL);
-
-        gnutls_key_generate(&cookie_key, GNUTLS_COOKIE_KEY_SIZE);
-
-        /* Socket operations
-         */
-        listen_sd = socket(AF_INET, SOCK_DGRAM, 0);
-
-        memset(&sa_serv, '\0', sizeof(sa_serv));
-        sa_serv.sin_family = AF_INET;
-        sa_serv.sin_addr.s_addr = INADDR_ANY;
-        sa_serv.sin_port = htons(PORT);
-
-        {                       /* DTLS requires the IP don't fragment (DF) bit to be set */
+	{ /* DTLS requires the IP don't fragment (DF) bit to be set */
 #if defined(IP_DONTFRAG)
-                int optval = 1;
-                setsockopt(listen_sd, IPPROTO_IP, IP_DONTFRAG,
-                           (const void *) &optval, sizeof(optval));
+	int optval = 1;
+	setsockopt(listen_sd, IPPROTO_IP, IP_DONTFRAG,
+			   (const void *) &optval, sizeof(optval));
 #elif defined(IP_MTU_DISCOVER)
-                int optval = IP_PMTUDISC_DO;
-                setsockopt(listen_sd, IPPROTO_IP, IP_MTU_DISCOVER,
-                           (const void *) &optval, sizeof(optval));
+	int optval = IP_PMTUDISC_DO;
+	setsockopt(listen_sd, IPPROTO_IP, IP_MTU_DISCOVER,
+			   (const void *) &optval, sizeof(optval));
 #endif
-        }
+	}
 
-        bind(listen_sd, (struct sockaddr *) &sa_serv, sizeof(sa_serv));
+	bind(listen_sd, (struct sockaddr *) &sa_serv, sizeof(sa_serv));
 
-        printf("UDP server ready. Listening to port '%d'.\n\n", PORT);
+	printf("UDP server ready. Listening to port '%d'.\n\n", port);
+	while (forever) {
+		for (;forever;) {
+			printf("Waiting for connection...\n");
+			sock = wait_for_connection(listen_sd);
+			if (sock < 0 ) continue;  /* error on attempted connect */			
+			processSecCTP(sock);	
+		}
+		close(listen_sd);
+	}
+	gnutls_certificate_free_credentials(x509_cred);
+	gnutls_priority_deinit(priority_cache);
 
-        for (;;) {
-                printf("Waiting for connection...\n");
-                sock = wait_for_connection(listen_sd);
-                if (sock < 0)
-                        continue;
+	gnutls_global_deinit();
 
-                cli_addr_size = sizeof(cli_addr);
-                ret = recvfrom(sock, buffer, sizeof(buffer), MSG_PEEK,
-                               (struct sockaddr *) &cli_addr,
-                               &cli_addr_size);
-                if (ret > 0) {
-                        memset(&prestate, 0, sizeof(prestate));
-                        ret =
-                            gnutls_dtls_cookie_verify(&cookie_key,
-                                                      &cli_addr,
-                                                      sizeof(cli_addr),
-                                                      buffer, ret,
-                                                      &prestate);
-                        if (ret < 0) {  /* cookie not valid */
-                                priv_data_st s;
+	return 0;
 
-                                memset(&s, 0, sizeof(s));
-                                s.fd = sock;
-                                s.cli_addr = (void *) &cli_addr;
-                                s.cli_addr_size = sizeof(cli_addr);
+}
 
-                                printf
-                                    ("Sending hello verify request to %s\n",
-                                     human_addr((struct sockaddr *)
-                                                &cli_addr,
-                                                sizeof(cli_addr), buffer,
-                                                sizeof(buffer)));
+int processSecCTP(int sock) {
+	
+	struct sockaddr_in cli_addr;
+	socklen_t cli_addr_size = sizeof(cli_addr);
+	
+	int ret = 0;
+	int dtlsStep;
+	
+	char buffer[MAX_BUF];
+	char *msg = NULL;
+	msgContents contents;
+	
+	priv_data_st priv;        
+	gnutls_dtls_prestate_st prestate;
+	int mtu = 1400;
+	unsigned char sequence[8];	
+	
+	
+	switch(secCTPstep) {
+		case 1: /* Expect unsecured hello message */ 	
+			if (!msg) msg = (char*)malloc(MAX_BUF);
+			ret = recvfrom(sock, buffer, sizeof(buffer), 0,
+				   (struct sockaddr *) &cli_addr,
+				   &cli_addr_size);
+			if (ret > 0) {
+					   // check if valid hello
+					   /* parse msg; if good, continue */ 
+				if ( (ret = parseMessage(&contents, buffer)) < 0) 
+					on_error("invalid response");
+				
+				if (contents.type == HELLO ) { //Assume compatabilty for now
+					if ( (ret =  generateResp(msg, OK, NULL, NULL)) > 0 )
+					 if ( (ret = sendto(sock, msg, sizeof(msg),0, (struct sockaddr *) &cli_addr,cli_addr_size)) > 0)               
+						secCTPstep = 2;					
+				}
+				else 
+					ret = -1;				
+			}
+			close(sock);
+			if (msg) {
+				free(msg);
+				msg = NULL;
+			}
+			break;
+		case 2: /* DTLS transaction */
+			dtlsStep = 1;
+			secCTPstep = 1; //Reset outer switch condition
+			while (dtlsStep < 4 && dtlsStep != DONE && ret >= 0) {	
+				switch(dtlsStep) {
+					case 1: /* DTLS Handshake */
+						ret = recvfrom(sock, buffer, sizeof(buffer), MSG_PEEK,
+								(struct sockaddr *) &cli_addr,
+								&cli_addr_size);
+						if (ret > 0) {				
+							/* dtls session and cookie setup */ 
+							memset(&prestate, 0, sizeof(prestate));
+							ret =
+								gnutls_dtls_cookie_verify(&cookie_key,
+														  &cli_addr,
+														  sizeof(cli_addr),
+														  buffer, ret,
+														  &prestate);
+							if (ret < 0) {  /* cookie not valid */
+								priv_data_st s;
 
-                                gnutls_dtls_cookie_send(&cookie_key,
-                                                        &cli_addr,
-                                                        sizeof(cli_addr),
-                                                        &prestate,
-                                                        (gnutls_transport_ptr_t)
-                                                        & s, push_func);
+								memset(&s, 0, sizeof(s));
+								s.fd = sock;
+								s.cli_addr = (void *) &cli_addr;
+								s.cli_addr_size = sizeof(cli_addr);				
 
-                                /* discard peeked data */
-                                recvfrom(sock, buffer, sizeof(buffer), 0,
-                                         (struct sockaddr *) &cli_addr,
-                                         &cli_addr_size);
-                                usleep(100);
-                                continue;
-                        }
-                        printf("Accepted connection from %s\n",
-                               human_addr((struct sockaddr *)
-                                          &cli_addr, sizeof(cli_addr),
-                                          buffer, sizeof(buffer)));
-                } else
-                        continue;
+								gnutls_dtls_cookie_send(&cookie_key,
+														&cli_addr,
+														sizeof(cli_addr),
+														&prestate,
+														(gnutls_transport_ptr_t)
+														& s, push_func);
 
-                gnutls_init(&session, GNUTLS_SERVER | GNUTLS_DATAGRAM);
-                gnutls_priority_set(session, priority_cache);
-                gnutls_credentials_set(session, GNUTLS_CRD_CERTIFICATE,
-                                       x509_cred);
+								/* discard peeked data */
+								recvfrom(sock, buffer, sizeof(buffer), 0,
+										 (struct sockaddr *) &cli_addr,
+										 &cli_addr_size);
+								usleep(100);
+								continue;  //loop around and wait for valid cookie on next attempt (might need to limit this)
+							}							
+						} else
+							break; //error on recieve to start handshake
+						//If otherwqise good, move on to DTLS set up and handshake
+							/* Set up GnuTLS for current session  */ 
+						gnutls_init(&session, GNUTLS_SERVER | GNUTLS_DATAGRAM);
+						gnutls_priority_set(session, priority_cache);
+						gnutls_credentials_set(session, GNUTLS_CRD_CERTIFICATE,
+											   x509_cred);
 
-                gnutls_dtls_prestate_set(session, &prestate);
-                gnutls_dtls_set_mtu(session, mtu);
+						gnutls_dtls_prestate_set(session, &prestate);
+						gnutls_dtls_set_mtu(session, mtu);
 
-                priv.session = session;
-                priv.fd = sock;
-                priv.cli_addr = (struct sockaddr *) &cli_addr;
-                priv.cli_addr_size = sizeof(cli_addr);
+						priv.session = session;
+						priv.fd = sock;
+						priv.cli_addr = (struct sockaddr *) &cli_addr;
+						priv.cli_addr_size = sizeof(cli_addr);
 
-                gnutls_transport_set_ptr(session, &priv);
-                gnutls_transport_set_push_function(session, push_func);
-                gnutls_transport_set_pull_function(session, pull_func);
-                gnutls_transport_set_pull_timeout_function(session,
-                                                           pull_timeout_func);
+						gnutls_transport_set_ptr(session, &priv);
+						gnutls_transport_set_push_function(session, push_func);
+						gnutls_transport_set_pull_function(session, pull_func);
+						gnutls_transport_set_pull_timeout_function(session,
+																   pull_timeout_func);
 
-                do {
-                        ret = gnutls_handshake(session);
-                }
-                while (ret == GNUTLS_E_INTERRUPTED
-                       || ret == GNUTLS_E_AGAIN);
-                /* Note that DTLS may also receive GNUTLS_E_LARGE_PACKET.
-                 * In that case the MTU should be adjusted.
-                 */
+						do {
+								ret = gnutls_handshake(session);
+						} while (ret == GNUTLS_E_INTERRUPTED|| ret == GNUTLS_E_AGAIN);
 
-                if (ret < 0) {
-                        fprintf(stderr, "Error in handshake(%d): %s\n", ret,
-                                gnutls_strerror(ret));
-                        gnutls_deinit(session);
-                        continue;
-                }
+						if (ret < 0) {
+							fprintf(stderr, "Error in handshake(%d): %s\n", ret,
+									gnutls_strerror(ret));					
+						} 
+						else 
+							dtlsStep = 2;
+						break;
+								
+					/* Actual message passing*/
+					case 2:  /* DTLS Hello */ 					
+						do {
+							ret =
+								gnutls_record_recv_seq(session, buffer,
+													   MAX_BUF,
+													   sequence);
+						} while (ret == GNUTLS_E_AGAIN || ret == GNUTLS_E_INTERRUPTED);
 
-                printf("- Handshake was completed\n");
+						if (ret < 0 && gnutls_error_is_fatal(ret) == 0) {
+							fprintf(stderr, "*** Warning: %s\n",
+									gnutls_strerror(ret));								
+						} else if (ret < 0) {
+							fprintf(stderr, "Error in recv(%d): %s\n",ret,
+									gnutls_strerror(ret));								
+						}
 
-                for (;;) {
-                        do {
-                                ret =
-                                    gnutls_record_recv_seq(session, buffer,
-                                                           MAX_BUFFER,
-                                                           sequence);
-                        }
-                        while (ret == GNUTLS_E_AGAIN
-                               || ret == GNUTLS_E_INTERRUPTED);
+						if (ret > 0) {
+							buffer[ret] = 0;
+							if ( (ret = parseMessage(&contents, buffer)) < 0) 
+								on_error("invalid message");
+			
+							if (contents.type == HELLO ) { //Assume compatabilty for now
+								if (!msg) msg = (char*)malloc(MAX_BUF);
+								if ( (ret =  generateResp(msg, OK, NULL, NULL)) > 0 )
+									if ( ( ret = gnutls_record_send(session, msg, sizeof(msg)) ) > 0 ) 									
+										dtlsStep = 3;					
+							}
+							else 
+								ret = -1;								
+						}							
+						break;
+					case 3: /* Authentication */ 
+						do {
+							ret =
+								gnutls_record_recv_seq(session, buffer,
+													   MAX_BUF,
+													   sequence);
+						} while (ret == GNUTLS_E_AGAIN || ret == GNUTLS_E_INTERRUPTED);
 
-                        if (ret < 0 && gnutls_error_is_fatal(ret) == 0) {
-                                fprintf(stderr, "*** Warning: %s\n",
-                                        gnutls_strerror(ret));
-                                continue;
-                        } else if (ret < 0) {
-                                fprintf(stderr, "Error in recv(%d): %s\n",ret,
-                                        gnutls_strerror(ret));
-                                break;
-                        }
+						if (ret < 0 && gnutls_error_is_fatal(ret) == 0) {
+							fprintf(stderr, "*** Warning: %s\n",
+									gnutls_strerror(ret));								
+						} else if (ret < 0) {
+							fprintf(stderr, "Error in recv(%d): %s\n",ret,
+									gnutls_strerror(ret));								
+						}
 
-                        if (ret == 0) {
-                                printf("EOF\n\n");
-                                break;
-                        }
+						if (ret > 0) {
+							buffer[ret] = 0;
+							if ( (ret = parseMessage(&contents, buffer)) < 0) 
+								on_error("invalid message");
+			
+							if (contents.type == REQ ) { //TODO: validation of credentials
+								if (!msg) msg = (char*)malloc(MAX_BUF);
+								if ( (ret =  generateResp(msg, OK, NULL, NULL)) > 0 )
+									if ( ( ret = gnutls_record_send(session, msg, sizeof(msg)) ) > 0 ) 									
+										dtlsStep = 4;					
+							}
+							else 
+								ret = -1;								
+						}							
+						break;						
+					case 4: 
+						//do the handoever to webserver of authentication status
+						dtlsStep = DONE;
+						break;
+					default:
+						ret = -1; //error
+				}//inner switch
+			}//case 2 while
+			break;  //case 2
+		default: 
+			ret = -1; //error
+	}//outer switch
+	
+	
+	if (secCTPstep > 1) {
+		close(sock);
+		gnutls_bye(session, GNUTLS_SHUT_WR);
+		gnutls_deinit(session);
+	}
+	if (msg) {
+		free(msg);
+		msg = NULL;
+	}
+	return ret;
+}
 
-                        buffer[ret] = 0;
-                        printf
-                            ("received[%.2x%.2x%.2x%.2x%.2x%.2x%.2x%.2x]: %s\n",
-                             sequence[0], sequence[1], sequence[2],
-                             sequence[3], sequence[4], sequence[5],
-                             sequence[6], sequence[7], buffer);
+int initgnutls(){
+	int ret;
 
-                        /* reply back */
-                        ret = gnutls_record_send(session, buffer, ret);
-                        if (ret < 0) {
-                                fprintf(stderr, "Error in send(): %s\n",
-                                        gnutls_strerror(ret));
-                                break;
-                        }
-                }
+    ret = gnutls_global_init();
+	if (ret < 0)  return ret;
+	
+        /* Set up X.509 stuff */
+    ret = gnutls_certificate_allocate_credentials(&x509_cred);
+	if (ret < 0)  return ret;
+	
+        /* Set the trusted cas file */
+    ret = gnutls_certificate_set_x509_trust_file(x509_cred, 
+								CAFILE,GNUTLS_X509_FMT_PEM);
+	if (ret < 0)  return ret;
 
-                gnutls_bye(session, GNUTLS_SHUT_WR);
-                gnutls_deinit(session);
+	ret = gnutls_certificate_set_x509_key_file(x509_cred, CERTFILE, 
+											 KEYFILE,
+											 GNUTLS_X509_FMT_PEM);
+	if (ret < 0) 
+		on_error("No certificate or key were found\n");
 
-        }
-        close(listen_sd);
 
-        gnutls_certificate_free_credentials(x509_cred);
-        gnutls_priority_deinit(priority_cache);
+	generate_dh_params();
 
-        gnutls_global_deinit();
+	gnutls_certificate_set_dh_params(x509_cred, dh_params);
 
-        return 0;
+	gnutls_priority_init(&priority_cache,
+		 "PERFORMANCE:-VERS-TLS-ALL:+VERS-DTLS1.0:%SERVER_PRECEDENCE",
+		 NULL);
+
+	gnutls_key_generate(&cookie_key, GNUTLS_COOKIE_KEY_SIZE);
+
+	return ret;
 
 }
 
@@ -439,3 +529,7 @@ static int generate_dh_params(void)
         return 0;
 }
 
+//Simple handling of SIGINT to cleanly close the applications
+void sigHandler(int sig) {
+	forever = 0;
+}
