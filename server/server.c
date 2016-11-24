@@ -16,19 +16,21 @@
 #include <unistd.h>
 #include <gnutls/gnutls.h>
 #include <gnutls/dtls.h>
+#include <mqueue.h>
 
 #include "../secctp.h"
+#include "server.h"
 
 #define KEYFILE "./certs/service-key.pem"
 #define CERTFILE "./certs/cert.pem"
 #define CAFILE "./certs/ca-cert.pem"
 
+#define QUEUE "/server_queue"
 
 #define MAX_BUF 1024
 #define PORT 5557
+#define WEBPORT 8888
 #define DONE -1
-
-#define on_error(...) {fprintf(stderr, __VA_ARGS__); fflush(stderr); return EXIT_FAILURE;}
 
 typedef struct {
         gnutls_session_t session;
@@ -57,6 +59,8 @@ gnutls_datum_t cookie_key;
 
 static volatile int forever = 1;
 int secCTPstep;
+mqd_t mq;
+
 
 int initgnutls();
 int processSecCTP(int sock);
@@ -65,14 +69,32 @@ void sigHandler(int sig);
 int main(int argc, char **argv)
 {
 	int listen_sd;
-	int sock, port;
+	int sock, port, webport;
 	struct sockaddr_in sa_serv;
 
-	if (argc != 2) 
+	if (argc != 3) {
 		port = PORT;
-	else 
+		webport = WEBPORT;
+	}
+	else {
 		port = atoi(argv[1]);	
+		webport = atoi(argv[2]);
+	}
 	
+	struct mq_attr attr;	
+	 /* initialize the queue attributes */
+    attr.mq_flags = 0;
+    attr.mq_maxmsg = 2;
+    attr.mq_msgsize = MAX_SIZE;
+    attr.mq_curmsgs = 0;
+		
+	if ( (mq = mq_open(QUEUE, O_RDWR | O_CREAT, 0644, &attr)) == (mqd_t) -1) 
+		on_error("Error opening queue");		
+	if (fork() == 0) { /* If queue is open, run monitor app in a separate process */	
+		if ( (execl("http.exe", "http.exe", webport, QUEUE, (char*) NULL)) < 0) 
+			on_error("Error start webserver");
+	}				
+
 	/* Try initializing gnutls*/
 	if (initgnutls() < 0) 
 		on_error("*** Error initializing gnutls.");	
@@ -134,7 +156,7 @@ int processSecCTP(int sock) {
 	gnutls_dtls_prestate_st prestate;
 	int mtu = 1400;
 	unsigned char sequence[8];	
-	
+	int authorized = 0;
 	
 	switch(secCTPstep) {
 		case 1: /* Expect unsecured hello message */ 	
@@ -291,6 +313,8 @@ int processSecCTP(int sock) {
 								on_error("invalid message");
 			
 							if (contents.type == REQ ) { //TODO: validation of credentials
+								//For now
+								authorized = 1;
 								if (!msg) msg = (char*)malloc(MAX_BUF);
 								if ( (ret =  generateResp(msg, OK, NULL, NULL)) > 0 )
 									if ( ( ret = gnutls_record_send(session, msg, sizeof(msg)) ) > 0 ) 									
@@ -301,7 +325,9 @@ int processSecCTP(int sock) {
 						}							
 						break;						
 					case 4: 
-						//do the handoever to webserver of authentication status
+						//do the handoever to webserver of authentication status						
+						if (authorized)
+							mq_send(mq, AUTHORIZED, MAX_SIZE, 0);						
 						dtlsStep = DONE;
 						break;
 					default:
@@ -311,8 +337,7 @@ int processSecCTP(int sock) {
 			break;  //case 2
 		default: 
 			ret = -1; //error
-	}//outer switch
-	
+	}//outer switch	
 	
 	if (secCTPstep > 1) {
 		close(sock);
@@ -323,6 +348,10 @@ int processSecCTP(int sock) {
 		free(msg);
 		msg = NULL;
 	}
+	
+	if (!authorized) //Failed at any step
+		mq_send(mq, NOT_AUTH, MAX_SIZE, 0);
+	
 	return ret;
 }
 
