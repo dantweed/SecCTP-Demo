@@ -14,6 +14,7 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <netdb.h> 
+#include <errno.h>
 
 using std::string;
 using std::cout;
@@ -75,7 +76,7 @@ int main(int argc, char* argv[]) {
 				
         // Config and construct sniffer
         SnifferConfiguration config;        
-        config.set_filter("tcp port 80"); //Only intersted in http         
+        config.set_filter("tcp port 8888"); //Only intersted in http         
         Sniffer sniffer(argv[1], config);
 
         cout << "Starting capture on interface " << argv[1] << endl;
@@ -106,7 +107,7 @@ int signalNIC(string server_addr, string uri) {
 	}
 	
 	if (connect(sockfd,(struct sockaddr *) &serv_addr,sizeof(serv_addr)) < 0) {
-		cerr << "ERROR connecting to server " << endl;
+		cerr << "ERROR connecting to server " << errno << endl;
 		
 	} else {
 		/* Build msg, msg format to be hostname/resource-ipaddress:port (i.e. three tokens)*/	
