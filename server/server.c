@@ -20,6 +20,7 @@
 
 #include "../secctp.h"
 #include "server.h"
+#include <signal.h>
 
 #define KEYFILE "./certs/service-key.pem"
 #define CERTFILE "./certs/cert.pem"
@@ -27,9 +28,11 @@
 
 #define QUEUE "/server_queue"
 
+#define WEB_DIR "webserver"
+
 #define MAX_BUF 1024
 #define PORT 5557
-#define WEBPORT 8888
+#define WEBPORT "8888"
 #define DONE -1
 
 typedef struct {
@@ -68,19 +71,21 @@ void sigHandler(int sig);
 
 int main(int argc, char **argv)
 {
-	int listen_sd;
-	int sock, port, webport;
+	int listen_sd, web_pid;
+	int sock, port;
+	char *webport;
 	struct sockaddr_in sa_serv;
-
+	struct sockaddr_in clientaddr; 	
+	socklen_t clientlen = sizeof(clientaddr);	 
 	if (argc != 3) {
 		port = PORT;
 		webport = WEBPORT;
 	}
 	else {
 		port = atoi(argv[1]);	
-		webport = atoi(argv[2]);
+		webport = argv[2];
 	}
-	
+	fprintf(stderr,"server set webport %s\n", webport);
 	struct mq_attr attr;	
 	 /* initialize the queue attributes */
     attr.mq_flags = 0;
@@ -90,10 +95,18 @@ int main(int argc, char **argv)
 		
 	if ( (mq = mq_open(QUEUE, O_RDWR | O_CREAT, 0644, &attr)) == (mqd_t) -1) 
 		on_error("Error opening queue");		
-	if (fork() == 0) { /* If queue is open, run monitor app in a separate process */	
-		if ( (execl("http.exe", "http.exe", webport, QUEUE, (char*) NULL)) < 0) 
-			on_error("Error start webserver");
-	}				
+	if ( (web_pid = fork()) == 0) { /* If queue is open, run webserver in a separate process */	
+		if (chdir(WEB_DIR) < 0)
+			on_error("Error with chdir %d", errno);
+		if ( (execl("web.exe", "web.exe", webport, QUEUE, (char*) 0)) < 0) 
+			on_error("Error start webserver %d", errno);
+	}
+	printf("web %d\n", web_pid);
+	struct sigaction act;
+	memset(&act, 0, sizeof(act));
+	act.sa_handler = &sigHandler;
+	if ( ( sigaction(SIGINT, &act, NULL)) < 0)
+		on_error("Error handling signal");				
 
 	/* Try initializing gnutls*/
 	if (initgnutls() < 0) 
@@ -125,19 +138,25 @@ int main(int argc, char **argv)
 	while (forever) {
 		for (;forever;) {
 			printf("Waiting for connection...\n");
-			sock = wait_for_connection(listen_sd);
-			if (sock < 0 ) continue;  /* error on attempted connect */			
-			processSecCTP(sock);	
+			sock = wait_for_connection(listen_sd);		
+			
+			if (forever && sock > 0 )  /* else error on attempted connect */			
+				processSecCTP(sock);	
 		}
 		close(listen_sd);
-	}
+	}	
+	
+	if ( kill(web_pid, SIGTERM) < 0 ) 
+		on_error("Error killing web server");
+	mq_close(mq);
+	mq_unlink(QUEUE);
+	
 	gnutls_certificate_free_credentials(x509_cred);
 	gnutls_priority_deinit(priority_cache);
 
 	gnutls_global_deinit();
 
 	return 0;
-
 }
 
 int processSecCTP(int sock) {
@@ -226,7 +245,7 @@ int processSecCTP(int sock) {
 							}							
 						} else
 							break; //error on recieve to start handshake
-						//If otherwqise good, move on to DTLS set up and handshake
+						//If otherwise good, move on to DTLS set up and handshake
 							/* Set up GnuTLS for current session  */ 
 						gnutls_init(&session, GNUTLS_SERVER | GNUTLS_DATAGRAM);
 						gnutls_priority_set(session, priority_cache);
@@ -409,7 +428,8 @@ static int wait_for_connection(int fd)
                 perror("select()");
                 exit(1);
         }
-
+		if (~forever)
+			fd = -1;
         return fd;
 }
 
@@ -547,11 +567,6 @@ static int generate_dh_params(void)
 {
         int bits = gnutls_sec_param_to_pk_bits(GNUTLS_PK_DH,
                                                GNUTLS_SEC_PARAM_LEGACY);
-
-        /* Generate Diffie-Hellman parameters - for use with DHE
-         * kx algorithms. When short bit length is used, it might
-         * be wise to regenerate parameters often.
-         */
         gnutls_dh_params_init(&dh_params);
         gnutls_dh_params_generate2(dh_params, bits);
 
