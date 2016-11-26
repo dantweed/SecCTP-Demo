@@ -18,6 +18,7 @@
 #include <mqueue.h>
 #include <pthread.h>
 #include <signal.h>
+#include <errno.h>
 
 //TODO: move to curses UI instead of stdin
 //#include <ncurses.h>
@@ -102,7 +103,7 @@ int main(int argc, char *argv[]) {
 		if ( (mq = mq_open(QUEUE, O_RDWR | O_CREAT, 0644, &attr)) == (mqd_t) -1) 
 			on_error("Error opening queue");		
 		if (fork() == 0) { /* If queue is open, run monitor app in a separate process */	
-			if ( (execl("active.exe", "active.exe", argv[1], QUEUE, (char*) NULL)) < 0) 
+			if ( (execl("active.exe", "active.exe", argv[1], QUEUE, (char*) 0)) < 0) 
 				on_error("Error opening active monitor");
 		}				
 	}	
@@ -133,8 +134,8 @@ int main(int argc, char *argv[]) {
 		on_error("ERROR on listen");
     
     if ( (synergy = fork()) == 0) { /* everything else checks out, start synergy for keyboard/mouse sharing*/	
-		if ( (execl("synergys", "synergys", "-c", "/path/to/config/file", (char*) NULL)) < 0)  //TODO:update config file
-			on_error("Error starting synergy");
+		if ( (execl("/usr/bin/synergys", "synergys", (char*) NULL)) < 0) 
+			on_error("1:Error starting synergy %d\n", errno);
 	}	
     				
 	/* Main loop */
@@ -164,8 +165,8 @@ int main(int argc, char *argv[]) {
 			childfd = -1;
 			/* Return keyboard control to user PC */
 			if ( (synergy = fork()) == 0) { 
-				if ( (execl("synergys", "synergys", "-c", "/path/to/config/file", (char*) NULL)) < 0) //TODO:update config file
-					on_error("Error starting synergy");
+				if ( (execl("synergys", "synergys", (char*) NULL)) < 0) 
+					on_error("2:Error starting synergy %d\n", errno);								
 			}
 		}
 		

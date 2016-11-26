@@ -18,10 +18,13 @@
 
 #include "../server.h"
 #include <mqueue.h>
+#include <signal.h>
+#include <errno.h>
 
 #define ERROR_PAGE "<html><head><title>Error</title></head><body>Error</body></html>"
 #define WORKING "<html><head><title>Processing</title></head><body>Processing request...</body></html>"
 
+void sigHandler(int sig);
 static int generate_page (void *cls,
    struct MHD_Connection *connection,
    const char *url,
@@ -33,13 +36,15 @@ static int generate_page (void *cls,
 static struct MHD_Response *error_response;
 static struct MHD_Response *working_response;
 static volatile int resume = 0;
-
+static volatile int forever = 1;
 mqd_t mq;
+
+
 
 int main (int argc, char **argv) {
 	struct MHD_Daemon *daemon;	
 	
-	if (argc != 2) {
+	if (argc != 3) {
 		printf("Usage: %s <port> <queue_name> \n",argv[0]);
 		return EXIT_FAILURE;
 	} 
@@ -49,20 +54,27 @@ int main (int argc, char **argv) {
 			
 	int port = atoi(argv[1]);
 		
-	
+	struct sigaction act;
+	memset(&act, 0, sizeof(act));
+	act.sa_handler = &sigHandler;	
+	if ( ( sigaction(SIGTERM, &act, NULL)) < 0)
+		on_error("Error handling signal");	
+		
+			
 	error_response = 
 		MHD_create_response_from_buffer (strlen (ERROR_PAGE),(void *) ERROR_PAGE, MHD_RESPMEM_PERSISTENT); 
-	error_response = 
+	working_response = 
 		MHD_create_response_from_buffer (strlen (WORKING),(void *) WORKING, MHD_RESPMEM_PERSISTENT);  
-
+	
 	daemon = MHD_start_daemon (MHD_USE_SELECT_INTERNALLY, port, NULL, 
 					NULL, &generate_page, NULL, MHD_OPTION_END);
 
 	if (NULL == daemon)
 		return 1;
-	printf("Press any key to shutdown server.\n");
-	(void) getchar();
-	MHD_stop_daemon (daemon);
+	while(forever){}
+	
+	MHD_stop_daemon (daemon);	
+	
 	return EXIT_SUCCESS	;
 }
 
@@ -82,10 +94,10 @@ static int generate_page (void *cls,
 	
 	int m = 0;
 	int bytes_rcvd;
-	char buffer[MAX_SIZE];
+	char buffer[MAX_SIZE+1];
 	
 	if ( (0 != strcmp (method, MHD_HTTP_METHOD_GET)) &&  
-		(0 != strcmp (method, MHD_HTTP_METHOD_HEAD)) )
+		(0 != strcmp (method, MHD_HTTP_METHOD_HEAD)) ) 			
 			return MHD_queue_response (connection, 	
 					MHD_HTTP_BAD_REQUEST, error_response);
 
@@ -94,19 +106,23 @@ static int generate_page (void *cls,
 		if ( (NULL == strstr (&url[1], "..")) && ('/' != url[1]) ) {
 			fd = open (&url[1], O_RDONLY);			
 			m = 0;
-		}
+		}		
 	}
 	else {
 		fd = open ("pages/main.html", O_RDONLY);	
-		m = 1;	
+		m = 1;
 	}
+	
 	if ( (-1 != fd) && ( (0 != fstat (fd, &buf)) || 
 		(! S_ISREG (buf.st_mode)) ) )	{
 		(void) close (fd);
 		fd = -1;
-	}
+	} 
+	if (-1 == fd ) 
+		return MHD_queue_response 
+				(connection, 	MHD_HTTP_BAD_REQUEST, error_response);
 	
-	if (-1 == fd )
+	if (-1 == fd ) 
 		return MHD_queue_response 
 				(connection, 	MHD_HTTP_BAD_REQUEST, error_response);
 
@@ -117,9 +133,10 @@ static int generate_page (void *cls,
 	}
 	if (m)
 		ret = MHD_queue_response (connection, MHD_HTTP_OK, response);
-	else {				
+	else {			
 		ret = MHD_queue_response (connection, MHD_HTTP_PROCESSING, working_response);
-		bytes_rcvd = mq_receive(mq, buffer, MAX_SIZE-1, NULL);
+		if ( (bytes_rcvd = mq_receive(mq, buffer, MAX_SIZE, NULL) ) < 0) 
+			fprintf(stderr,"queue error %d",errno);fflush(stderr);
 		buffer[bytes_rcvd] = '\0';
 		if (strncmp(buffer, AUTHORIZED, strlen(AUTHORIZED))) 
 			ret = MHD_queue_response (connection, MHD_HTTP_OK, response);
@@ -130,5 +147,7 @@ static int generate_page (void *cls,
 	return ret;
 }
 
-
+void sigHandler(int sig) {
+	forever = 0;
+}
 
