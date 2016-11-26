@@ -29,7 +29,7 @@
 #define on_error(...) {fprintf(stderr, __VA_ARGS__); fflush(stderr); return EXIT_FAILURE;}
 
 #define LISTENPORT 5555 	//For incoming notifications from User PC
-//defaults for testing
+//defaults for testing TODO: Update to handle arbitrary port, server IP
 #define SECCTPPORT  5557
 #define SECCTPSERVER  "127.0.0.1" 
 
@@ -40,6 +40,7 @@
 #define QUEUE "/nic_queue"
 #define CAFILE "./certs/cert.pem"  //TODO:generate new certs for distributed example
 #define MSG_TOKENS 4
+#define DONE -1
 
 gnutls_session_t session;
 gnutls_certificate_credentials_t xcred;
@@ -75,6 +76,7 @@ int main(int argc, char *argv[]) {
 	socklen_t clientlen;
 	int n, ret;	
 	int portno = LISTENPORT;  
+	pid_t synergy;
 	char buf[MAX_BUF];
 
 	struct sockaddr_in serveraddr;
@@ -101,8 +103,8 @@ int main(int argc, char *argv[]) {
 			on_error("Error opening queue");		
 		if (fork() == 0) { /* If queue is open, run monitor app in a separate process */	
 			if ( (execl("active.exe", "active.exe", argv[1], QUEUE, (char*) NULL)) < 0) 
-				on_error("Error openning active monitor");
-		}		
+				on_error("Error opening active monitor");
+		}				
 	}	
 	
 	memset(&act, '\0', sizeof(act));
@@ -129,17 +131,25 @@ int main(int argc, char *argv[]) {
 	
 	if (listen(parentfd, 1) < 0)  /* only accept one connection at a time for now */ 
 		on_error("ERROR on listen");
+    
+    if ( (synergy = fork()) == 0) { /* everything else checks out, start synergy for keyboard/mouse sharing*/	
+		if ( (execl("synergys", "synergys", "-c", "/path/to/config/file", (char*) NULL)) < 0)  //TODO:update config file
+			on_error("Error starting synergy");
+	}	
     				
 	/* Main loop */
 	clientlen = sizeof(clientaddr);	
-	while (forever) { /* Always be listening */ 	  //TODO: make multi-threaded for handling server initiated requests		
+	while (forever) { /* Always be listening */ 	  //TODO: make multi-threaded and handling server initiated requests		
 		
 		if ( (childfd = accept(parentfd, (struct sockaddr *) &clientaddr, &clientlen)) < 0 && forever) 
 			on_error("ERROR on accept");	
 		if (forever && childfd > 0) { //Covers case of sig interupt out of accept block
-		/* On accept, get request details */	
+		/* On accept, kill synergy for now and get request details */	
+			if ( ( ret = kill(synergy, SIGTERM)) < 0 ) 
+				on_error("Error killing synergy");
 			if ((n = read(childfd, buf, MAX_BUF)) < 0) 
 				on_error("Error on read");
+		
 		/* Validate session, then server in request via DNS, call functions for SecCTP transaction */ 
 			if ( (ret = parseUserPCmsg(&secCTPserver,buf) != MSG_TOKENS)) 
 				on_error("Invalid message from User PC");
@@ -151,7 +161,12 @@ int main(int argc, char *argv[]) {
 				break; //error condition
 			
 			close(childfd);
-			childfd = 0;
+			childfd = -1;
+			/* Return keyboard control to user PC */
+			if ( (synergy = fork()) == 0) { 
+				if ( (execl("synergys", "synergys", "-c", "/path/to/config/file", (char*) NULL)) < 0) //TODO:update config file
+					on_error("Error starting synergy");
+			}
 		}
 		
 	}
@@ -248,10 +263,10 @@ int processSecCTP(serverDetails *secCTPserver) {
 	int ret = -1;
 	int sd,n;
 	int step = 1;
-	char *headers,*creds;
+	char *headers, *creds;
 	
     msgContents contents;
-    while (step < 4 && ret >= 0) {
+    while (step < 4 && step != DONE && ret >= 0) {
 		switch(step) {
 			case 1:	/* Send unsecure hello message */
 				msg = (char*)malloc(MAX_BUF);
@@ -270,8 +285,10 @@ int processSecCTP(serverDetails *secCTPserver) {
 				if ( (ret = parseMessage(&contents, resp)) < 0) 
 					on_error("invalid response");
 				
-				if (contents.type == RESP && contents.status == OK) 
+				if (contents.type == RESP && contents.status == OK) {
 					step = 2;
+					close(sd);  //FIXME: Workaround to avoid direct upgrade on open socket
+				}
 				else 
 					ret = -1;
 				break;
@@ -316,6 +333,7 @@ int processSecCTP(serverDetails *secCTPserver) {
 			case 4: 
 			/* returning control to user PC */ 
 			//TODO
+				step = DONE;
 				break;
 		}
 	}
@@ -356,10 +374,9 @@ int userIO (char *resp, char *hostname){  //userIO)char *resp, char *hostname, i
 
 int dtls_connect(serverDetails *secCTPserver){
 	int ret;
-	int secCTPsd;
- 	
+	int secCTPsd;	
 
- 		     /* Set the X.509 credentials to the current session */ 
+		/* Set the X.509 credentials to the current session */ 
 	ret = gnutls_credentials_set(session, GNUTLS_CRD_CERTIFICATE, xcred);
 	if (ret < 0)  return ret;
 	
@@ -413,7 +430,7 @@ int sendDTLSmessage(char *msg, char *resp) {
 	return ret;
 }
 
-/* Initializatino functions from gnutls dtls example */
+/* Initialization functions from gnutls dtls example */
 int initgnutls(){
 	int ret;
 
@@ -421,7 +438,7 @@ int initgnutls(){
 		on_error("GnuTLS 3.1.4 or later is required.\n");        
 
         /* for backwards compatibility with gnutls < 3.3.0 */
-        ret = gnutls_global_init();
+    ret = gnutls_global_init();
 	if (ret < 0)  return ret;
 	
         /* Set up X.509 stuff */
@@ -437,12 +454,9 @@ int initgnutls(){
 	if (ret < 0)  return ret;
 	
         /* Use default priorities */
-    ret = gnutls_set_default_priority(session);
-	if (ret < 0)  return ret;	
-   
+    ret = gnutls_set_default_priority(session);  
 
 	return ret;
-
 }
 
 /* clean and close gnutls stuff */
