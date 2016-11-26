@@ -101,7 +101,7 @@ int main(int argc, char *argv[]) {
 	} else {
 		/* Set up mqueue and launch active.cpp */ 
 		if ( (mq = mq_open(QUEUE, O_RDWR | O_CREAT, 0644, &attr)) == (mqd_t) -1) 
-			on_error("Error opening queue");		
+			on_error("Error opening queue %d", errno);		
 		if (fork() == 0) { /* If queue is open, run monitor app in a separate process */	
 			if ( (execl("active.exe", "active.exe", argv[1], QUEUE, (char*) 0)) < 0) 
 				on_error("Error opening active monitor");
@@ -111,12 +111,12 @@ int main(int argc, char *argv[]) {
 	memset(&act, '\0', sizeof(act));
 	act.sa_handler = &sigHandler;
 	if ( ( sigaction(SIGINT, &act, NULL)) < 0)
-		on_error("Error handling signal");
+		on_error("Error handling signal %d", errno);
 	/* set up tcp server socket */
 	if ( (parentfd = socket(AF_INET, SOCK_STREAM, 0)) < 0) 
-		on_error("*** Error opening socket for tcp server");	
+		on_error("*** Error opening socket for tcp server %d", errno);	
 	optval = 1;
-	setsockopt(parentfd, SOL_SOCKET, SO_REUSEADDR, (const void *)&optval , sizeof(int));
+	setsockopt(parentfd, SOL_SOCKET, SO_REUSEADDR|SO_REUSEPORT, (const void *)&optval , sizeof(int));
 
 	bzero((char *) &serveraddr, sizeof(serveraddr)); 	
 	/* Bind to whatever our IP address is and selected port */
@@ -124,38 +124,43 @@ int main(int argc, char *argv[]) {
 	serveraddr.sin_addr.s_addr = htonl(INADDR_ANY);  
 	serveraddr.sin_port = htons((unsigned short)portno);
 	if (bind(parentfd, (struct sockaddr *) &serveraddr, sizeof(serveraddr)) < 0) 
-		on_error("ERROR on binding");
+		on_error("ERROR on binding %d", errno);
 	
 	/* If everything else checks out, try initializing gnutls*/
 	if (initgnutls() < 0) 
-		on_error("*** Error initializing gnutls.");	
+		on_error("*** Error initializing gnutls");	
 	
 	if (listen(parentfd, 1) < 0)  /* only accept one connection at a time for now */ 
-		on_error("ERROR on listen");
+		on_error("ERROR on listen %d", errno);
     
     if ( (synergy = fork()) == 0) { /* everything else checks out, start synergy for keyboard/mouse sharing*/	
-		if ( (execl("/usr/bin/synergys", "synergys", (char*) NULL)) < 0) 
+		if ( (execl("/usr/bin/synergys", "synergys", "--address", "localhost:24800",(char*) NULL)) < 0) 
 			on_error("1:Error starting synergy %d\n", errno);
 	}	
     				
 	/* Main loop */
 	clientlen = sizeof(clientaddr);	
-	while (forever) { /* Always be listening */ 	  //TODO: make multi-threaded and handling server initiated requests		
+	while (forever) { /* Always be listening */ 	  //TODO: make multi-threaded and handling server initiated requests				
 		
+		fprintf(stderr,"before accept %d\n", childfd);fflush(stderr);
 		if ( (childfd = accept(parentfd, (struct sockaddr *) &clientaddr, &clientlen)) < 0 && forever) 
-			on_error("ERROR on accept");	
+			on_error("ERROR on accept %d\n", errno);	
+		fprintf(stderr,"after accept %d\n", childfd);fflush(stderr);
 		if (forever && childfd > 0) { //Covers case of sig interupt out of accept block
 		/* On accept, kill synergy for now and get request details */	
+			fprintf(stderr,"killing syn\n");fflush(stderr);
 			if ( ( ret = kill(synergy, SIGTERM)) < 0 ) 
 				on_error("Error killing synergy");
+			synergy = 0;
+			fprintf(stderr,"reading\n");fflush(stderr);
 			if ((n = read(childfd, buf, MAX_BUF)) < 0) 
-				on_error("Error on read");
+				on_error("Error on read %d",errno);
 		
 		/* Validate session, then server in request via DNS, call functions for SecCTP transaction */ 
 			if ( (ret = parseUserPCmsg(&secCTPserver,buf) != MSG_TOKENS)) 
-				on_error("Invalid message from User PC");
+				on_error("Invalid message from User PC\n");
 			if ((ret = validateServer(&secCTPserver) != 0)) 
-				on_error("Invalid server or request");
+				on_error("Invalid server or request\n");
 			
 			//Outcome of SecCTP transaction
 			if (forever && (ret = processSecCTP(&secCTPserver)) < 0) 
@@ -179,7 +184,8 @@ int main(int argc, char *argv[]) {
 	mq_unlink(QUEUE);
 	close(parentfd);
     dtls_deinit();
-	
+	if ( synergy && ( ret = kill(synergy, SIGTERM)) < 0 ) 
+		on_error("Error killing synergy");
 	return EXIT_SUCCESS;
 }
 
@@ -231,8 +237,10 @@ int validateServer(serverDetails *secCTPserver) {
 int parseUserPCmsg(serverDetails *secCTPserver, char *buf){
 	int count = 0;
 	char *pch = strtok(buf, "/");
+fprintf(stderr,buf); fflush(stderr);
 
 /* msg format to be hostname/resource-ipaddress:port (i.e. four tokens)*/	
+
 	if (pch != NULL) {
 		secCTPserver->hostname = pch;
 		count++;
