@@ -134,14 +134,18 @@ static int generate_page (void *cls,
 	if (m)
 		ret = MHD_queue_response (connection, MHD_HTTP_OK, response);
 	else {			
+		
+		if (MHD_add_response_header(working_response, "SecCTP-URI", "192.168.123.100-5557") == MHD_NO)
+				fprintf(stderr,"error adding header");fflush(stderr);
 		ret = MHD_queue_response (connection, MHD_HTTP_PROCESSING, working_response);
-		if ( (bytes_rcvd = mq_receive(mq, buffer, MAX_SIZE, NULL) ) < 0) 
-			fprintf(stderr,"queue error %d",errno);fflush(stderr);
-		buffer[bytes_rcvd] = '\0';
-		if (strncmp(buffer, AUTHORIZED, strlen(AUTHORIZED))) 
-			ret = MHD_queue_response (connection, MHD_HTTP_OK, response);
-		else
-			ret = MHD_queue_response (connection, MHD_HTTP_FORBIDDEN, response);
+		fprintf(stderr,"testing");fflush(stderr);
+		//if ( (bytes_rcvd = mq_receive(mq, buffer, MAX_SIZE, NULL) ) < 0) 
+		//	fprintf(stderr,"queue error %d",errno);fflush(stderr);
+		//buffer[bytes_rcvd] = '\0';
+		//if (strncmp(buffer, AUTHORIZED, strlen(AUTHORIZED))) 
+		//	ret = MHD_queue_response (connection, MHD_HTTP_OK, response);
+		//else
+		//	ret = MHD_queue_response (connection, MHD_HTTP_FORBIDDEN, response);
 	}
 	MHD_destroy_response (response);
 	return ret;

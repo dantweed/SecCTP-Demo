@@ -42,8 +42,8 @@ const size_t MAX_PAYLOAD = 3 * 1024;
  //Get the message code
 regex code_regex("HTTP/[^ ]+ ([\\d]+)");
  //Search for SecCTP URI (assume hostname is same as main server, extract from active stream)
-regex uri_regex("SecCTP-URI: ((?:\"[^\"\n]*\"|[^\r\n])*)");  //format hostname:port per RFC 3986
-
+//regex uri_regex("([\\w]+) ([^ ]+).+\r\nSecCTP-URI: ((?:\"[^\"\n]*\"|[^\r\n])*)");  //format hostname:port per RFC 3986
+//regex request_regex("([\\w]+) ([^ ]+).+\r\nHost: ([\\d\\w\\.-]+)\r\n");
 //For testing and later, extracting all http headers
 regex headers_regex("((?:\"[^\"\n]*\"|[^:,\n])*):((?:\"[^\"\n]*\"|[^,\n])*)");
 
@@ -116,10 +116,9 @@ int signalNIC(string server_addr, string uri) {
 		msg = oss.str();
 		
 		//Send msg
-		wc = write(sockfd, msg.data(), msg.length());		
-		
-			
-		cout << "Success" << endl;
+		wc = write(sockfd, msg.data(), msg.length());			
+		cout << "msg " << msg << endl;
+		cout << "Success wc " << wc << endl;
 	}	
 	close(sockfd);	
 	return wc;
@@ -133,15 +132,19 @@ void on_server_data(Stream& stream) {
     
     // Run the regex on server payload
     bool valid = regex_search(server_payload.begin(), server_payload.end(),
-                              server_match, code_regex) && 
+                              server_match, code_regex); //&& 
                  regex_search(server_payload.begin(), server_payload.end(),
 							client_match,headers_regex);// uri_regex);
 	
-    if (valid) {   		
+    if (valid) {   		//string(client_match[2].first, client_match[2].second);
         string response_code = string(server_match[1].first, server_match[1].second);        		
-		string secCTP_uri = string(client_match[1].first, client_match[1].second);
+		string secCTP_uri = string(client_match[3].first, client_match[3].second);	
 	cout << "resp = " << response_code << "  uri= " << secCTP_uri << endl;
-		if (std::stoi(response_code) == PROCESSING) {
+	cout << string(client_match[2].first, client_match[2].second)<< endl;
+	cout << string(client_match[3].first, client_match[3].second)<< endl;
+	cout << string(client_match[4].first, client_match[4].second)<< endl;
+	
+		if (std::stoi(response_code) == PROCESSING) {			
 			IPv4Address server_addr = stream.server_addr_v4();
 			cout << server_addr.to_string() << endl;			
 			
