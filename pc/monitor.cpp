@@ -132,7 +132,7 @@ void on_server_data(Stream& stream) {
     const Stream::payload_type& client_payload = stream.client_payload();
     // Run the regex on server payload
     bool valid = regex_search(server_payload.begin(), server_payload.end(),
-                              server_match, code_regex); && 
+                             server_match, code_regex); && 
                //  regex_search(client_payload.begin(), client_payload.end(),
 				//			client_match,headers_regex);// uri_regex);
 							
@@ -140,11 +140,12 @@ void on_server_data(Stream& stream) {
 	std::string str_svr_payload(server_payload.begin(), server_payload.end());
 	std::string str_clt_payload(client_payload.begin(), client_payload.end());
 	
+
 	
-    if (valid) {   		
+    if (valid) {   		//string(client_match[2].first, client_match[2].second);
         string response_code = string(server_match[1].first, server_match[1].second);        		
 		string secCTP_uri = string(client_match[3].first, client_match[3].second);	
-		cout << "resp = " << response_code << "  uri= " << secCTP_uri << endl;
+	cout << "resp = " << response_code << "  uri= " << secCTP_uri << endl;
 		
 		if (std::stoi(response_code) == PROCESSING) {			
 			IPv4Address server_addr = stream.server_addr_v4();
