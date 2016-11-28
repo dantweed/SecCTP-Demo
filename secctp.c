@@ -24,9 +24,9 @@ int generateMsg(char *msg, char *headers, char *body) {
 		strcat(msg, "\r\n"); //mandatory blank line
 		if (body)
 			strcat(msg, body);
-		ret = 0;
+		ret = strlen(msg);
 		free(time);
-	}
+	}	
 	return ret;
 }
 
@@ -60,13 +60,22 @@ int generateHello(char *msg, char *method, char *user_headers, char *body){
  * Parameter msg contains formatted message
  * (Reference SecCTP draft Sec. 7.2 )
 */
-int generateReq(char *msg, char *method, char *uri, char *headers, char *body){
+int generateReq(char *msg, char *method, char *uri, char *user_headers, char *body){
 	int ret = -1;
-	if (msg && method && uri && headers) {
-		sprintf(msg, "%s %s %s\r\n", method, uri, VERSION);
-		ret = generateMsg(msg, headers, body);
+	char *headers = (char*)calloc(MAX_HEADER_SIZE, sizeof(char));
+	if (headers != NULL) {
+		//Hello messages require accepted languages header field		
+		strcat(headers, LANG);
+		if (user_headers) {
+			strcat(headers,user_headers);  //Not robust against overflow
+		} 	
+		if (msg && method && uri && headers) {
+			sprintf(msg, "%s %s %s\r\n", method, uri, VERSION);
+			ret = generateMsg(msg, headers, body);
+		}
+		free(headers);
 	}
-	return ret;
+	return ret;	
 }
 
 /* Generate SecCTP Response message
@@ -74,15 +83,22 @@ int generateReq(char *msg, char *method, char *uri, char *headers, char *body){
  * Parameter msg contains formatted message
  * (Reference SecCTP draft Sec. 7.3 )
 */
-int generateResp(char *msg, int status_code,char *headers, char *body){
+int generateResp(char *msg, int status_code, char *user_headers, char *body){	
 	int ret = -1;
-	if (msg && headers) {
-		if (check_code(status_code)) {
+	char *headers = (char*)calloc(MAX_HEADER_SIZE, sizeof(char));
+	if (headers != NULL) {
+		//Hello messages require accepted languages header field		
+		strcat(headers, LANG);
+		if (user_headers) {
+			strcat(headers,user_headers);  //Not robust against overflow
+		} 			
+		if (check_code(status_code) && msg && headers) {
 			sprintf(msg, "%s %d\r\n", VERSION, status_code);
 			ret = generateMsg(msg, headers, body);
 		}
+		free(headers);
 	}
-	return ret;
+	return ret;	
 }
 
 /* Extract contents of SecCTP message
@@ -95,7 +111,8 @@ int parseMessage(msgContents *contents, char *msg) {
 	char *tok;
 	char *infoline;
 	char *headers;
-	int count; 
+	int count = 0; 
+	
 	
 	if (msg != NULL) { /* else msg is not a valid pointer */
 		/* extract info line */
@@ -107,9 +124,10 @@ int parseMessage(msgContents *contents, char *msg) {
 			tok = strtok(NULL, "\r\n");
 			if (tok != NULL) { /* else message is invalid */
 				headers = (char*) calloc(MAX_HEADER_SIZE, sizeof(char));
-				headers = tok;		
+					
 				while (tok != NULL && count <= MAX_HEADER_SIZE - 1) {
-					strcat(headers, tok);
+					strncat(headers, tok, strlen(tok));
+					strncat(headers, "\r\n", 2);
 					count += strlen(tok);
 					tok = strtok(NULL, "\r\n");
 				}
@@ -120,25 +138,31 @@ int parseMessage(msgContents *contents, char *msg) {
 				/* parse info line */				
 				char *toks[3];			
 				count = 0;	
-				while ( (tok = strtok(infoline, " ")) != NULL && count < 3)
+				tok = strtok(infoline, " ");
+				while ( tok != NULL && count < 3) {			
 					toks[count++] = tok;
+					tok = strtok(NULL, " ");
+				}
+				
 				if (count == 3) { //Request
 					contents->type = REQ;
 					contents->method = toks[0];
 					contents->resource = toks[1];
 					contents->version = toks[2];
 					ret = 0;
-				} else if (count == 2) { //Info or Response
-					if (strlen(toks[0]) == strlen(VERSION) && strlen(toks[1]) == 3) { //Matches format for Repsonse
+				} else if (count == 2) { //Hello or Response
+					if (strlen(toks[0]) == strlen(VERSION)) { //Matches format for Repsonse
 						contents->type = RESP;
 						contents->version = toks[0];
 						char *end_ptr; 
 						int code = strtol(toks[1], &end_ptr, 10);
-						if ( errno != ERANGE && errno != 0 && end_ptr == '\0' )  //Number and only a number was found
+						fprintf(stderr,"resp tok1 %s\ncode=%d\n",toks[1],code);fflush(stderr);												
+							
+						if check_code(code) {/* if valid, set return flag */
 							contents->status = code;
-						if check_code(code) /* if valid, set return flag */
-							ret = 0;						
-					} else if (strlen(toks[1]) == strlen(VERSION) && strlen(toks[1]) == 3) { //Matches format for hello
+							ret = 0;		
+						} 						
+					} else if (strlen(toks[1]) == strlen(VERSION)) { //Matches format for hello
 						contents->type = HELLO;
 						contents->method = toks[0];						
 						contents->version = toks[1];

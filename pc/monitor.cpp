@@ -39,11 +39,10 @@ using Tins::IPv4Address;
 const size_t MAX_PAYLOAD = 3 * 1024;
 
 //Some regex to extract necessary data
- //Get the message code
+ //Get the status code
 regex code_regex("HTTP/[^ ]+ ([\\d]+)");
  //Search for SecCTP URI (assume hostname is same as main server, extract from active stream)
-//regex uri_regex("([\\w]+) ([^ ]+).+\r\nSecCTP-URI: ((?:\"[^\"\n]*\"|[^\r\n])*)");  //format hostname:port per RFC 3986
-regex request_regex("([\\w]+) ([^ ]+).+\r\nHost: ([\\d\\w\\.-]+)\r\n");
+regex uri_regex("([\\w]+) ([^ ]+).+\r\nSecCTP: ([\\d\\w\\.-]+)\r\n"); //format hostname:port per RFC 3986
 //For testing and later, extracting all http headers
 regex headers_regex("((?:\"[^\"\n]*\"|[^:,\n])*):((?:\"[^\"\n]*\"|[^,\n])*)");
 
@@ -55,7 +54,7 @@ struct hostent *server;
 void on_server_data(Stream& stream);
 void on_client_data(Stream& stream);
 void on_new_connection(Stream& stream);
-int signalNIC(string server_addr, string secCTP_uri);
+int signalNIC(string server_addr, string uri, string url);
 
 int main(int argc, char* argv[]) {
     if (argc != 4) {
@@ -95,7 +94,7 @@ int main(int argc, char* argv[]) {
     }
 }
 
-int signalNIC(string server_addr, string uri) {
+int signalNIC(string server_addr, string uri, string url) {
 	int wc = -1;
 	string msg;
 	string delim = ":";
@@ -113,7 +112,8 @@ int signalNIC(string server_addr, string uri) {
 		/* Build msg, msg format to be hostname/resource-ipaddress:port (i.e. three tokens)*/	
 		//URI from headers will be hostname/resource:port
 		oss << uri.substr(0,uri.find(delim)) << "-" << server_addr << ":" << uri.substr(uri.find(delim)+1) << "\n";
-		msg = oss.str();
+		//msg = oss.str();
+		msg = "localhost/pages/secure.html-127.0.0.1:5557";
 		
 		//Send msg
 		wc = write(sockfd, msg.data(), msg.length());			
@@ -126,34 +126,33 @@ int signalNIC(string server_addr, string uri) {
 
 void on_server_data(Stream& stream) {
     match_results<Stream::payload_type::const_iterator> server_match;
-    match_results<Stream::payload_type::const_iterator> client_match;
-    
+    match_results<Stream::payload_type::const_iterator> uri_match;
+    match_results<Stream::payload_type::const_iterator> client_match;    
+        
+     
     const Stream::payload_type& server_payload = stream.server_payload();
     const Stream::payload_type& client_payload = stream.client_payload();
+        
+    
     // Run the regex on server payload
     bool valid = regex_search(server_payload.begin(), server_payload.end(),
-                             server_match, code_regex); && 
-               //  regex_search(client_payload.begin(), client_payload.end(),
-				//			client_match,headers_regex);// uri_regex);
-							
-	//Test conversion to string, parse headers out
-	std::string str_svr_payload(server_payload.begin(), server_payload.end());
-	std::string str_clt_payload(client_payload.begin(), client_payload.end());
-	
-
-	
-    if (valid) {   		//string(client_match[2].first, client_match[2].second);
-        string response_code = string(server_match[1].first, server_match[1].second);        		
-		string secCTP_uri = string(client_match[3].first, client_match[3].second);	
-	cout << "resp = " << response_code << "  uri= " << secCTP_uri << endl;
+                           server_match, code_regex);
 		
-		if (std::stoi(response_code) == PROCESSING) {			
+	cout << "valid = " << valid << endl;
+	
+    if (valid) {   		
+        string response_code = string(server_match[1].first, server_match[1].second);  	
+		cout << "resp = " << response_code << endl; 
+		if (std::stoi(response_code) == PROCESSING) {	
+			cout << "in processing"  << endl;			
+			              
 			IPv4Address server_addr = stream.server_addr_v4();
-			cout << server_addr.to_string() << endl;			
-			
-			if (signalNIC(server_addr.to_string(), secCTP_uri) < 0)
-				cerr << "Error in signaling SecNIC for auth" << endl;
+				cout << server_addr.to_string() << endl;			
+				
+			if (signalNIC(server_addr.to_string(), "127.0.0.1:5557", "pages/secure.html") < 0)
+					cerr << "Error in signaling SecNIC for auth" << endl;			
 		}
+		
     }
     
     // Just in case the server returns invalid data, stop at 3kb
@@ -162,10 +161,17 @@ void on_server_data(Stream& stream) {
     }
 }
 
+void on_client_data(Stream& stream) {
+			//Do nothing					
+}
+
 void on_new_connection(Stream& stream) {	
-    stream.ignore_client_data(); //Only monitoring server messages for now
+    //stream.ignore_client_data(); //Only monitoring server messages for now
     stream.server_data_callback(&on_server_data);	
+    stream.client_data_callback(&on_client_data);
     stream.auto_cleanup_payloads(true); //No need to buffer the data
+    
+    
 }
 
 
