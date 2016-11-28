@@ -7,6 +7,7 @@
 #include "tins/ipv6_address.h"
 #include <pthread.h>
 #include <mqueue.h>
+#include <errno.h>
 
 #include "nic.h"
 
@@ -37,27 +38,29 @@ multiset<Tins::IPv4Address> active;
 int main(int argc, char* argv[]) {
     
     pthread_t thread;       
-    mqd_t mq;
-    char buffer[MAX_SIZE];
+    mqd_t mq_snd;
+    mqd_t mq_recv;
+    
+    char buffer[MAX_SIZE+1];
     ssize_t bytes_rcvd;
     std::string response = "";
     
-    if (argc != 3) {
-        cout << "Usage: " << argv[0] << " <interface> <mqueue name>" << endl;
+    if (argc != 4) {
+        cout << "Usage: " << argv[0] << " <interface> <send mqueue name> <recv mqueue name>" << endl;
         return EXIT_FAILURE;
     }
 
     try {//TODO: More meaningful exit codes
 		
         //Open the message queue for send/rec'd 
-        if ( (mq = mq_open(argv[2], O_RDWR)) == (mqd_t) -1) {
-			cout << "queue does not exist" << endl;
+        if ( (mq_recv = mq_open(argv[2], O_RDONLY)) == (mqd_t) -1 || (mq_snd = mq_open(argv[3], O_WRONLY)) == (mqd_t) -1) {
+			cout << "queue does not exist " << errno << endl;
 			return EXIT_FAILURE;
 		}
 			
         // Only capture TCP traffic sent from/to the given port
         SnifferConfiguration config;        
-        config.set_filter("tcp port 80");        
+        config.set_filter("tcp port 8888");        
         Sniffer sniffer(argv[1], config);
 		
         cout << "Starting capture on interface " << argv[1] << endl;
@@ -67,19 +70,23 @@ int main(int argc, char* argv[]) {
         //Inf loop until kill received from top level applicationi
         while (1) {
 			//block on reading mqueue, act on message rec'd
-			bytes_rcvd = mq_receive(mq, buffer, MAX_SIZE-1, NULL);
-			
-			buffer[bytes_rcvd] = '\0';
-			if (strncmp(buffer, MSG_DIE, strlen(MSG_DIE))) {						
-				if ( (mqd_t)-1 == mq_close(mq) ) 
+			bytes_rcvd = mq_receive(mq_recv, buffer, MAX_SIZE, NULL);			
+			buffer[bytes_rcvd] = '\0';			
+			if (0 == strncmp(buffer, MSG_DIE, strlen(MSG_DIE))) {					
+				if ( (mqd_t)-1 == mq_close(mq_snd) || (mqd_t)-1 == mq_close(mq_recv)) 
 					return EXIT_FAILURE;
 				return EXIT_SUCCESS;	
-			} else {
-				std::string addr = buffer;
-				IPv4Address check(addr);
-				(active.find(check) == active.end())? response =  NOT_FOUND: response = FOUND;	
+			} else {				
+				std::string addr(buffer);
+								
+				IPv4Address check(addr);			
+			
+				(active.find(check) == active.end())? response =  NOT_FOUND: response = FOUND;					
+				cerr << "sending from active " << response.c_str() << endl;
+				if ( mq_send(mq_snd, response.c_str(), strlen(response.c_str()), 0) < 0) 
+					cerr << "error on send " << errno << endl;
 				
-				mq_send(mq, response.c_str(), MAX_SIZE, 0);
+				
 			}			
 		}		
     }
@@ -103,8 +110,7 @@ void *monitor(void *args){
 
 void on_new_connection(Stream& stream) {
     //Add new connect to list
-    active.insert(stream.server_addr_v4());     
-    
+    active.insert(stream.server_addr_v4());         
     //Only interested in the connections, not interested in the data
     stream.ignore_server_data();
     stream.ignore_client_data();    
@@ -114,6 +120,6 @@ void on_new_connection(Stream& stream) {
 }
 
 void on_connection_closed(Stream& stream) {
-    //Remove closed connect from list
+    //Remove closed connect from list    
 	active.erase(active.find(stream.server_addr_v4()));		
 }

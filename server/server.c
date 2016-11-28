@@ -61,7 +61,7 @@ gnutls_session_t session;
 gnutls_datum_t cookie_key;
 
 static volatile int forever = 1;
-int secCTPstep;
+int secCTPstep = 1;
 mqd_t mq;
 
 
@@ -73,6 +73,7 @@ int main(int argc, char **argv)
 {
 	int listen_sd, web_pid;
 	int sock, port;
+	int optval;
 	char *webport;
 	struct sockaddr_in sa_serv;
 	struct sockaddr_in clientaddr; 	
@@ -122,26 +123,33 @@ int main(int argc, char **argv)
 
 	{ /* DTLS requires the IP don't fragment (DF) bit to be set */
 #if defined(IP_DONTFRAG)
-	int optval = 1;
+	optval = 1;
 	setsockopt(listen_sd, IPPROTO_IP, IP_DONTFRAG,
 			   (const void *) &optval, sizeof(optval));
 #elif defined(IP_MTU_DISCOVER)
-	int optval = IP_PMTUDISC_DO;
+	optval = IP_PMTUDISC_DO;
 	setsockopt(listen_sd, IPPROTO_IP, IP_MTU_DISCOVER,
 			   (const void *) &optval, sizeof(optval));
 #endif
 	}
 
-	bind(listen_sd, (struct sockaddr *) &sa_serv, sizeof(sa_serv));
-
+	if ( bind(listen_sd, (struct sockaddr *) &sa_serv, sizeof(sa_serv)) < 0)
+		on_error("ERROR on binding server %d", errno);
 	printf("UDP server ready. Listening to port '%d'.\n\n", port);
 	while (forever) {
-		for (;forever;) {
-			printf("Waiting for connection...\n");
+		
+		for (;forever;) {			
+			printf("Waiting for connection...\n");			
 			sock = wait_for_connection(listen_sd);		
 			
 			if (forever && sock > 0 )  /* else error on attempted connect */			
 				processSecCTP(sock);	
+			close(listen_sd);
+			listen_sd = socket(AF_INET, SOCK_DGRAM, 0);
+			setsockopt(listen_sd, IPPROTO_IP, IP_MTU_DISCOVER,
+			   (const void *) &optval, sizeof(optval));
+			  if ( bind(listen_sd, (struct sockaddr *) &sa_serv, sizeof(sa_serv)) < 0)
+		on_error("ERROR on binding server %d", errno);
 		}
 		close(listen_sd);
 	}	
@@ -165,7 +173,7 @@ int processSecCTP(int sock) {
 	socklen_t cli_addr_size = sizeof(cli_addr);
 	
 	int ret = 0;
-	int dtlsStep;
+	int dtlsStep = 1;
 	
 	char buffer[MAX_BUF];
 	char *msg = NULL;
@@ -176,37 +184,46 @@ int processSecCTP(int sock) {
 	int mtu = 1400;
 	unsigned char sequence[8];	
 	int authorized = 0;
-	
+	fprintf(stderr,"before server while, fd %d\n",sock);fflush(stderr);	
+		
 	switch(secCTPstep) {
 		case 1: /* Expect unsecured hello message */ 	
-			if (!msg) msg = (char*)malloc(MAX_BUF);
-			ret = recvfrom(sock, buffer, sizeof(buffer), 0,
+			if (!msg) msg = (char*)calloc(MAX_BUF, sizeof(char));
+			ret = recvfrom(sock, buffer, sizeof(buffer)-1, 0,
 				   (struct sockaddr *) &cli_addr,
 				   &cli_addr_size);
+				   fprintf(stderr,"recvd,\n%s\n",buffer);fflush(stderr);
+				  
 			if (ret > 0) {
 					   // check if valid hello
 					   /* parse msg; if good, continue */ 
 				if ( (ret = parseMessage(&contents, buffer)) < 0) 
-					on_error("invalid response");
+					on_error("invalid hello: server\n");
 				
 				if (contents.type == HELLO ) { //Assume compatabilty for now
-					if ( (ret =  generateResp(msg, OK, NULL, NULL)) > 0 )
-					 if ( (ret = sendto(sock, msg, sizeof(msg),0, (struct sockaddr *) &cli_addr,cli_addr_size)) > 0)               
-						secCTPstep = 2;					
+					if ( (ret =  generateResp(msg, OK, NULL, NULL)) > 0 ) {		
+						fprintf(stderr,"server resp\n %s\n",msg);fflush(stderr);				
+						if ( (ret = sendto(sock, msg, strlen(msg), 0, (struct sockaddr *) &cli_addr,cli_addr_size)) > 0)   {            
+							secCTPstep = 2;					
+						} else 
+							fprintf(stderr,"error sending resp \n");fflush(stderr);
+					} else 
+						fprintf(stderr,"error generating resp \n");fflush(stderr);
 				}
-				else 
-					ret = -1;				
+				else {
+					fprintf(stderr,"error in hello recv %d\n", contents.type);fflush(stderr);	
+					ret = -1;	
+				}			
 			}
-			close(sock);
+			//close(sock);
 			if (msg) {
 				free(msg);
 				msg = NULL;
 			}
 			break;
 		case 2: /* DTLS transaction */
-			dtlsStep = 1;
-			secCTPstep = 1; //Reset outer switch condition
-			while (dtlsStep < 4 && dtlsStep != DONE && ret >= 0) {	
+			dtlsStep = 1;			
+			while (dtlsStep <= 4 && dtlsStep != DONE && ret >= 0) {	
 				switch(dtlsStep) {
 					case 1: /* DTLS Handshake */
 						ret = recvfrom(sock, buffer, sizeof(buffer), MSG_PEEK,
@@ -301,7 +318,7 @@ int processSecCTP(int sock) {
 								on_error("invalid message");
 			
 							if (contents.type == HELLO ) { //Assume compatabilty for now
-								if (!msg) msg = (char*)malloc(MAX_BUF);
+								if (!msg) msg = (char*)calloc(MAX_BUF, sizeof(char));
 								if ( (ret =  generateResp(msg, OK, NULL, NULL)) > 0 )
 									if ( ( ret = gnutls_record_send(session, msg, sizeof(msg)) ) > 0 ) 									
 										dtlsStep = 3;					
@@ -334,7 +351,7 @@ int processSecCTP(int sock) {
 							if (contents.type == REQ ) { //TODO: validation of credentials
 								//For now
 								authorized = 1;
-								if (!msg) msg = (char*)malloc(MAX_BUF);
+								if (!msg) msg = (char*)calloc(MAX_BUF, sizeof(char));
 								if ( (ret =  generateResp(msg, OK, NULL, NULL)) > 0 )
 									if ( ( ret = gnutls_record_send(session, msg, sizeof(msg)) ) > 0 ) 									
 										dtlsStep = 4;					
@@ -358,8 +375,9 @@ int processSecCTP(int sock) {
 			ret = -1; //error
 	}//outer switch	
 	
-	if (secCTPstep > 1) {
-		close(sock);
+	if (secCTPstep > 1 && dtlsStep> 1) {
+		//close(sock);
+		secCTPstep = 1; //Reset outer switch condition
 		gnutls_bye(session, GNUTLS_SHUT_WR);
 		gnutls_deinit(session);
 	}
@@ -421,15 +439,15 @@ static int wait_for_connection(int fd)
         FD_SET(fd, &rd);
 
         /* waiting part */
-        n = select(fd + 1, &rd, &wr, NULL, NULL);
-        if (n == -1 && errno == EINTR)
+        n = select(fd + 1, &rd, &wr, NULL, NULL);                
+        if (n == -1 && errno == EINTR) 
                 return -1;
+        
         if (n < 0) {
                 perror("select()");
                 exit(1);
         }
-		if (~forever)
-			fd = -1;
+		
         return fd;
 }
 

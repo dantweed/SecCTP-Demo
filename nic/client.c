@@ -38,7 +38,8 @@
 #define PWD_LENGTH 160
 #define UNAME_LENGTH 20
 #define CRED_LENGTH (UNAME_LENGTH+PWD_LENGTH)
-#define QUEUE "/nic_queue"
+#define SENDQUEUE "/nic_queue_send"
+#define RECVQUEUE "/nic_queue_recv"
 #define CAFILE "./certs/cert.pem"  //TODO:generate new certs for distributed example
 #define MSG_TOKENS 4
 #define DONE -1
@@ -66,7 +67,8 @@ void sigHandler(int sig);
 
 extern int verify_certificate_callback(gnutls_session_t session);
 
-mqd_t mq;
+mqd_t mq_snd;
+mqd_t mq_recv;
 static volatile int forever = 1;
 
 int main(int argc, char *argv[]) {
@@ -100,10 +102,12 @@ int main(int argc, char *argv[]) {
 	    on_error("Usage is %s <external facing interface>\n",argv[0]);		
 	} else {
 		/* Set up mqueue and launch active.cpp */ 
-		if ( (mq = mq_open(QUEUE, O_RDWR | O_CREAT, 0644, &attr)) == (mqd_t) -1) 
-			on_error("Error opening queue %d", errno);		
+		if ( (mq_snd = mq_open(SENDQUEUE, O_WRONLY| O_CREAT, 0644, &attr)) == (mqd_t) -1) 
+			on_error("Error opening queue %d", errno);	
+		if ( (mq_recv = mq_open(RECVQUEUE, O_RDONLY | O_CREAT, 0644, &attr)) == (mqd_t) -1) 
+			on_error("Error opening queue %d", errno);	
 		if (fork() == 0) { /* If queue is open, run monitor app in a separate process */	
-			if ( (execl("active.exe", "active.exe", argv[1], QUEUE, (char*) 0)) < 0) 
+			if ( (execl("active.exe", "active.exe", argv[1], SENDQUEUE, RECVQUEUE, (char*) 0)) < 0) 
 				on_error("Error opening active monitor");
 		}				
 	}	
@@ -132,11 +136,11 @@ int main(int argc, char *argv[]) {
 	
 	if (listen(parentfd, 1) < 0)  /* only accept one connection at a time for now */ 
 		on_error("ERROR on listen %d", errno);
-    
-    if ( (synergy = fork()) == 0) { /* everything else checks out, start synergy for keyboard/mouse sharing*/	
+    /*
+    if ( (synergy = fork()) == 0) { // everything else checks out, start synergy for keyboard/mouse sharing	
 		if ( (execl("/usr/bin/synergys", "synergys", "--address", "localhost:24800",(char*) NULL)) < 0) 
 			on_error("1:Error starting synergy %d\n", errno);
-	}	
+	}	*/
     				
 	/* Main loop */
 	clientlen = sizeof(clientaddr);	
@@ -147,15 +151,16 @@ int main(int argc, char *argv[]) {
 			on_error("ERROR on accept %d\n", errno);	
 		fprintf(stderr,"after accept %d\n", childfd);fflush(stderr);
 		if (forever && childfd > 0) { //Covers case of sig interupt out of accept block
-		/* On accept, kill synergy for now and get request details */	
+		/* On accept, kill synergy for now and get request details 
 			fprintf(stderr,"killing syn\n");fflush(stderr);
 			if ( ( ret = kill(synergy, SIGTERM)) < 0 ) 
 				on_error("Error killing synergy");
-			synergy = 0;
-			fprintf(stderr,"reading\n");fflush(stderr);
+			synergy = 0; */	
+			
 			if ((n = read(childfd, buf, MAX_BUF)) < 0) 
 				on_error("Error on read %d",errno);
-		
+			buf[n] = '\0';
+			
 		/* Validate session, then server in request via DNS, call functions for SecCTP transaction */ 
 			if ( (ret = parseUserPCmsg(&secCTPserver,buf) != MSG_TOKENS)) 
 				on_error("Invalid message from User PC\n");
@@ -163,56 +168,65 @@ int main(int argc, char *argv[]) {
 				on_error("Invalid server or request\n");
 			
 			//Outcome of SecCTP transaction
-			if (forever && (ret = processSecCTP(&secCTPserver)) < 0) 
+			fprintf(stderr,"before secctp \n");fflush(stderr);
+			if (forever && (ret = processSecCTP(&secCTPserver)) < 0) {
+				fprintf(stderr,"after secctp %d\n",ret);fflush(stderr);
 				break; //error condition
+				
+			}
 			
 			close(childfd);
 			childfd = -1;
-			/* Return keyboard control to user PC */
+			/* Return keyboard control to user PC 
 			if ( (synergy = fork()) == 0) { 
 				if ( (execl("synergys", "synergys", (char*) NULL)) < 0) 
-					on_error("2:Error starting synergy %d\n", errno);								
-			}
+					on_error("2:Error starting synergy %d\n", errno);						
+			}*/	
 		}
 		
 	}
 	/* Send kill to active.cpp application  */
-	mq_send(mq, MSG_DIE, MAX_SIZE, 0);
-
+	mq_send(mq_snd, MSG_DIE, strlen(MSG_DIE), 0);
+	
 	/* Clean up */ 	
-	mq_close(mq);
-	mq_unlink(QUEUE);
+	fprintf(stderr,"Clean up"); fflush(stderr);
+	mq_close(mq_snd);
+	mq_close(mq_recv);
+	mq_unlink(SENDQUEUE);
+	mq_unlink(RECVQUEUE);
 	close(parentfd);
     dtls_deinit();
+	/*
 	if ( synergy && ( ret = kill(synergy, SIGTERM)) < 0 ) 
-		on_error("Error killing synergy");
+		on_error("Error killing synergy"); */
 	return EXIT_SUCCESS;
 }
 
 /* Validats that this is an active session and validates server details */
 int validateServer(serverDetails *secCTPserver) {
-	struct addrinfo hints, *res, *p;
+	struct addrinfo *res= NULL, *p, hints;
 	int ret;
 	int result = -1; //Assume no match
 	int bytesRcvd;
-	char ipstrComp[INET_ADDRSTRLEN];
-	char buffer[MAX_SIZE];
+	char ipstrComp[INET_ADDRSTRLEN+1];
+	char buffer[MAX_SIZE+1];
 	
 	
 	/* check if hostname/IP pair is valid request */		
 	memset(&hints, 0, sizeof(hints));
 	hints.ai_family = AF_INET; 
 	hints.ai_socktype = SOCK_STREAM;
-
+	
 	if ((ret = getaddrinfo(secCTPserver->hostname, NULL, &hints, &res)) != 0) 
 		on_error("getaddrinfo: %s\n", gai_strerror(ret));		
 	
-	for(p = res;p != NULL && !result; p = p->ai_next) {
-		
-		if (p->ai_family == AF_INET) { // IPv4
+	
+	for(p = res;p != NULL && result != 0 ; p = p->ai_next) {
+		fprintf(stderr,"in for %d\n",result); fflush(stderr);
+		if (p->ai_family == AF_INET) { // IPv4			
 			struct sockaddr_in *ipv4 = (struct sockaddr_in *)p->ai_addr;
-			inet_ntop(AF_INET, &(ipv4->sin_addr), ipstrComp, INET_ADDRSTRLEN);
-			result = strncmp(ipstrComp, secCTPserver->addr, INET_ADDRSTRLEN);
+			inet_ntop(AF_INET, &(ipv4->sin_addr), ipstrComp, INET_ADDRSTRLEN);			
+			result = strncmp(ipstrComp, secCTPserver->addr, INET_ADDRSTRLEN);			
 		} // else ignore IPv6 for now			
 	}
 
@@ -221,46 +235,46 @@ int validateServer(serverDetails *secCTPserver) {
 	if (result == 0) {
 		/* check if valid active connection */
 		strncpy(buffer, secCTPserver->addr, INET_ADDRSTRLEN);
-		
-		mq_send(mq, buffer, MAX_SIZE, 0);
+		fprintf(stderr,"buffer  %s\n", buffer); fflush(stderr);
+		mq_send(mq_snd, buffer, strlen(buffer), 0);
 		/* wait for response */
-		bytesRcvd = mq_receive(mq, buffer, MAX_SIZE-1, NULL);			
+		fprintf(stderr,"waiting for resp\n"); fflush(stderr);
+		bytesRcvd = mq_receive(mq_recv, buffer, MAX_SIZE, NULL);			
 		buffer[bytesRcvd] = '\0';
-				
-		if (sscanf(buffer, "%d", &result) <= 0)
+		fprintf(stderr,"buffer after %s\n", buffer); fflush(stderr);
+		if (strncmp(buffer, FOUND, strlen(FOUND)) != 0)
 			result = -1; //Error
 	}	
+	fprintf(stderr,"end of validate %d\n", result); fflush(stderr);
 	return result;
 	
 }
 
-int parseUserPCmsg(serverDetails *secCTPserver, char *buf){
+int parseUserPCmsg(serverDetails *secCTPserver, char *buf){	
 	int count = 0;
 	char *pch = strtok(buf, "/");
-fprintf(stderr,buf); fflush(stderr);
-
+	
 /* msg format to be hostname/resource-ipaddress:port (i.e. four tokens)*/	
 
 	if (pch != NULL) {
 		secCTPserver->hostname = pch;
-		count++;
-		pch = strtok(NULL, "-");
-		if (pch != NULL) {
+		count++;		
+		pch = strtok(NULL, "-");		
+		if (pch != NULL) {			
 			secCTPserver->resource = pch;
-			count++;
-			pch = strtok(NULL, ":");
-			if (pch != NULL) {
-				secCTPserver->addr = (void*)pch;
-				if (strlen(secCTPserver->addr) == INET_ADDRSTRLEN) 
-					count++;			
+			count++;			
+			pch = strtok(NULL, ":");			
+			if (pch != NULL) {				
+				secCTPserver->addr = pch;
+				count++;					
 				pch = strtok(NULL, ":");
-				if (pch != NULL) {
+				if (pch != NULL) {					
 					secCTPserver->port = atoi(pch);
-					count++;	
+					count++;					
 				}
 			}
 		}		
-	} 	
+	} 		
 	return count;
 }
 
@@ -269,13 +283,19 @@ fprintf(stderr,buf); fflush(stderr);
 int processSecCTP(serverDetails *secCTPserver) { 
 	char resp[MAX_BUF];
 	char *msg;	
-	int ret = -1;
+	int ret = 0;
 	int sd,n;
 	int step = 1;
 	char *headers, *creds;
 	
+	struct sockaddr_in svraddr; 	
+	socklen_t svrlen = sizeof(svraddr);	
+	
+	fprintf(stderr,"in secctp \n");fflush(stderr);
     msgContents contents;
+    
     while (step < 4 && step != DONE && ret >= 0) {
+		fprintf(stderr,"client while, step %d\nport = %d\n",step,secCTPserver->port);fflush(stderr);
 		switch(step) {
 			case 1:	/* Send unsecure hello message */
 				msg = (char*)malloc(MAX_BUF);
@@ -286,13 +306,14 @@ int processSecCTP(serverDetails *secCTPserver) {
 				if ((n = send(sd, msg, strlen(msg), 0)) < 0)
 					on_error("ERROR in send hello");	
 				
-				/* block on wait for server's reply */
-				if ( (n = recv(sd, resp, strlen(resp), 0)) < 0)
-					on_error("ERROR in recv hello resp");
-					
+				/* block on wait for server's reply */				
+				if ( (n = recvfrom(sd, resp, MAX_BUF - 1, 0, (struct sockaddr *)&svraddr,  &svrlen)) < 0) 
+				  	on_error("ERROR in recv hello resp");
+				resp[n] = '\0';
+				fprintf(stderr,"resp(%d)= %s \n",n, resp);fflush(stderr);	
 			   /* parse msg; if good, continue */ 
 				if ( (ret = parseMessage(&contents, resp)) < 0) 
-					on_error("invalid response");
+					on_error("invalid response to hello\n");
 				
 				if (contents.type == RESP && contents.status == OK) {
 					step = 2;
@@ -303,17 +324,18 @@ int processSecCTP(serverDetails *secCTPserver) {
 				break;
 			case 2: /* Send DTLS hello message */
 				if ( (sd = dtls_connect(secCTPserver)) > 0) {
+					fprintf(stderr,"dtls connected \n");fflush(stderr);
 					ret = sendDTLSmessage(msg, resp);
-						/* parse msg; if good, continue */ 
+						/* parse msg; if good, continue */ //FIXME HERE
 					if ( ret > 0 && (ret = parseMessage(&contents, resp)) < 0) 
-						on_error("invalid response");					
+						on_error("invalid response\n");					
 					if (contents.type == RESP && contents.status == OK) 
 						step = 3;
 					else 
-						ret = -1;						
+						ret = -2;						
 				} 
 				else 
-					ret = -1;
+					ret = -3;
 				break;
 			case 3: /* complete authentication transaction */  		
 
@@ -335,7 +357,7 @@ int processSecCTP(serverDetails *secCTPserver) {
 				if (contents.type == RESP && contents.status == OK) 
 					step = 4;
 				else 
-					ret = -1;
+					ret = -4;
 				if(creds) free(creds);
 				if(headers) free(headers);				
 				break;
@@ -346,7 +368,8 @@ int processSecCTP(serverDetails *secCTPserver) {
 				break;
 		}
 	}
-	/* clean up and close */ 		
+	/* clean up and close */ 	
+	fprintf(stderr,"before bye %d\n",ret);fflush(stderr);	
 	ret = gnutls_bye(session, GNUTLS_SHUT_WR); //0 is success
 	if (msg) 
 		free (msg);     
