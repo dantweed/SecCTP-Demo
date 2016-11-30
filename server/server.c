@@ -26,7 +26,8 @@
 #define CERTFILE "./certs/cert.pem"
 #define CAFILE "./certs/ca-cert.pem"
 
-#define QUEUE "/server_queue"
+#define SENDQUEUE "/server_queue_snd"
+#define RECVQUEUE "/server_queue_rcv"
 
 #define WEB_DIR "webserver"
 
@@ -62,16 +63,18 @@ gnutls_datum_t cookie_key;
 
 static volatile int forever = 1;
 int secCTPstep = 1;
-mqd_t mq;
+mqd_t mq_snd;
+mqd_t mq_rcv;
 
 
 int initgnutls();
 int processSecCTP(int sock);
 void sigHandler(int sig);
+int web_pid;
 
 int main(int argc, char **argv)
 {
-	int listen_sd, web_pid;
+	int listen_sd;
 	int sock, port;
 	int optval;
 	char *webport;
@@ -93,13 +96,15 @@ int main(int argc, char **argv)
     attr.mq_maxmsg = 2;
     attr.mq_msgsize = MAX_SIZE;
     attr.mq_curmsgs = 0;
+	if ( (mq_snd = mq_open(SENDQUEUE, O_WRONLY| O_CREAT, 0644, &attr)) == (mqd_t) -1) 
+			on_error("Error opening queue %d", errno);	
+	if ( (mq_rcv = mq_open(RECVQUEUE, O_RDONLY | O_CREAT, 0644, &attr)) == (mqd_t) -1) 
+			on_error("Error opening queue %d", errno);	
 		
-	if ( (mq = mq_open(QUEUE, O_RDWR | O_CREAT, 0644, &attr)) == (mqd_t) -1) 
-		on_error("Error opening queue");		
-	if ( (web_pid = fork()) == 0) { /* If queue is open, run webserver in a separate process */	
+	if ( (web_pid = fork()) == 0) { /* If queues open, run webserver in a separate process */	
 		if (chdir(WEB_DIR) < 0)
 			on_error("Error with chdir %d", errno);
-		if ( (execl("web.exe", "web.exe", webport, QUEUE, (char*) 0)) < 0) 
+		if ( (execl("web.exe", "web.exe", webport, SENDQUEUE, RECVQUEUE, (char*) 0)) < 0) 
 			on_error("Error start webserver %d", errno);
 	}
 	printf("web %d\n", web_pid);
@@ -134,7 +139,7 @@ int main(int argc, char **argv)
 	}
 
 	if ( bind(listen_sd, (struct sockaddr *) &sa_serv, sizeof(sa_serv)) < 0)
-		on_error("ERROR on binding server %d", errno);
+		on_error("ERROR on binding server 1%d", errno);
 	printf("UDP server ready. Listening to port '%d'.\n\n", port);
 	while (forever) {
 		
@@ -144,20 +149,22 @@ int main(int argc, char **argv)
 			
 			if (forever && sock > 0 )  /* else error on attempted connect */			
 				processSecCTP(sock);	
-			close(listen_sd);
-			listen_sd = socket(AF_INET, SOCK_DGRAM, 0);
-			setsockopt(listen_sd, IPPROTO_IP, IP_MTU_DISCOVER,
-			   (const void *) &optval, sizeof(optval));
-			  if ( bind(listen_sd, (struct sockaddr *) &sa_serv, sizeof(sa_serv)) < 0)
-		on_error("ERROR on binding server %d", errno);
+			//close(listen_sd);
+			//listen_sd = socket(AF_INET, SOCK_DGRAM, 0);
+			//setsockopt(listen_sd, IPPROTO_IP, IP_MTU_DISCOVER,
+			//   (const void *) &optval, sizeof(optval));
+			//  if ( bind(listen_sd, (struct sockaddr *) &sa_serv, sizeof(sa_serv)) < 0)
+		//on_error("ERROR on binding server2 %d", errno);
 		}
 		close(listen_sd);
 	}	
 	
 	if ( kill(web_pid, SIGTERM) < 0 ) 
 		on_error("Error killing web server");
-	mq_close(mq);
-	mq_unlink(QUEUE);
+	mq_close(mq_snd);
+	mq_close(mq_rcv);
+	mq_unlink(SENDQUEUE);
+	mq_unlink(RECVQUEUE);
 	
 	gnutls_certificate_free_credentials(x509_cred);
 	gnutls_priority_deinit(priority_cache);
@@ -173,7 +180,7 @@ int processSecCTP(int sock) {
 	socklen_t cli_addr_size = sizeof(cli_addr);
 	
 	int ret = 0;
-	int dtlsStep = 1;
+	int dtlsStep = 0;
 	
 	char buffer[MAX_BUF];
 	char *msg = NULL;
@@ -184,7 +191,7 @@ int processSecCTP(int sock) {
 	int mtu = 1400;
 	unsigned char sequence[8];	
 	int authorized = 0;
-	fprintf(stderr,"before server while, fd %d\n",sock);fflush(stderr);	
+	fprintf(stderr,"before server while, fd %d CTPstep %d dtlsStep %d\n",sock,secCTPstep,dtlsStep);fflush(stderr);	
 		
 	switch(secCTPstep) {
 		case 1: /* Expect unsecured hello message */ 	
@@ -220,16 +227,21 @@ int processSecCTP(int sock) {
 				free(msg);
 				msg = NULL;
 			}
+			fprintf(stderr,"end of init hello ret %d CTPstep %d\n",msg,secCTPstep);fflush(stderr);
+			
 			break;
-		case 2: /* DTLS transaction */
-			dtlsStep = 1;			
+		case 2: /* DTLS transaction */		
+			dtlsStep = 1;				
 			while (dtlsStep <= 4 && dtlsStep != DONE && ret >= 0) {	
 				switch(dtlsStep) {
 					case 1: /* DTLS Handshake */
+					fprintf(stderr,"in handshake\n",buffer);fflush(stderr);		
 						ret = recvfrom(sock, buffer, sizeof(buffer), MSG_PEEK,
 								(struct sockaddr *) &cli_addr,
 								&cli_addr_size);
-						if (ret > 0) {				
+						if (ret > 0) {	
+							buffer[ret] = '\0';
+							fprintf(stderr,"1st dtls msg\n%s\n",buffer);fflush(stderr);		
 							/* dtls session and cookie setup */ 
 							memset(&prestate, 0, sizeof(prestate));
 							ret =
@@ -289,10 +301,12 @@ int processSecCTP(int sock) {
 
 						if (ret < 0) {
 							fprintf(stderr, "Error in handshake(%d): %s\n", ret,
-									gnutls_strerror(ret));					
+									gnutls_strerror(ret));		
+							dtlsStep = DONE;			
 						} 
 						else 
 							dtlsStep = 2;
+						fprintf(stderr,"after handshake ret %d\n",ret);fflush(stderr);	
 						break;
 								
 					/* Actual message passing*/
@@ -314,18 +328,22 @@ int processSecCTP(int sock) {
 
 						if (ret > 0) {
 							buffer[ret] = 0;
+							fprintf(stderr,"2nd dtls msg\n%s\n",buffer);fflush(stderr);	
 							if ( (ret = parseMessage(&contents, buffer)) < 0) 
 								on_error("invalid message");
 			
 							if (contents.type == HELLO ) { //Assume compatabilty for now
 								if (!msg) msg = (char*)calloc(MAX_BUF, sizeof(char));
-								if ( (ret =  generateResp(msg, OK, NULL, NULL)) > 0 )
-									if ( ( ret = gnutls_record_send(session, msg, sizeof(msg)) ) > 0 ) 									
+								if ( (ret =  generateResp(msg, OK, NULL, NULL)) > 0 ) {
+									fprintf(stderr,"dtls resp\n%s\n",msg);fflush(stderr);	
+									if ( ( ret = gnutls_record_send(session, msg, strlen(msg)) ) > 0 ) 									
 										dtlsStep = 3;					
+								}
 							}
 							else 
 								ret = -1;								
-						}							
+						}
+						fprintf(stderr,"after step2 ret %d\n",ret);fflush(stderr);								
 						break;
 					case 3: /* Authentication */ 
 						do {
@@ -347,24 +365,45 @@ int processSecCTP(int sock) {
 							buffer[ret] = 0;
 							if ( (ret = parseMessage(&contents, buffer)) < 0) 
 								on_error("invalid message");
-			
+							
+							fprintf(stderr,"3rd dtls msg\n%s\n",buffer);fflush(stderr);	
 							if (contents.type == REQ ) { //TODO: validation of credentials
 								//For now
 								authorized = 1;
 								if (!msg) msg = (char*)calloc(MAX_BUF, sizeof(char));
-								if ( (ret =  generateResp(msg, OK, NULL, NULL)) > 0 )
-									if ( ( ret = gnutls_record_send(session, msg, sizeof(msg)) ) > 0 ) 									
+								if ( (ret =  generateResp(msg, OK, NULL, NULL)) > 0 ) {
+									fprintf(stderr,"dtls resp\n%s\n",msg);fflush(stderr);	
+									if ( ( ret = gnutls_record_send(session, msg, strlen(msg)) ) > 0 ) 									
 										dtlsStep = 4;					
+									else
+										dtlsStep = DONE;
+								}								
 							}
 							else 
 								ret = -1;								
-						}							
+						}	
+						fprintf(stderr,"after step3 ret %d\n",ret);fflush(stderr);							
 						break;						
 					case 4: 
-						//do the handoever to webserver of authentication status						
-						if (authorized)
-							mq_send(mq, AUTHORIZED, MAX_SIZE, 0);						
-						dtlsStep = DONE;
+						fprintf(stderr,"in final step ret %d auth %d\n",ret,authorized);fflush(stderr);	
+						//pass back to webserver the authentication status												
+						if (authorized) {
+							ret = mq_send(mq_snd, AUTHORIZED, strlen(AUTHORIZED), 0);						
+												
+							fprintf(stderr,"msg sent %d\n", ret);fflush(stderr);	
+							if (ret < 0) {
+								fprintf(stderr,"error in send %d\n", errno);fflush(stderr);	}
+							else {
+								union sigval auth;
+								auth.sival_int = authorized;	
+								
+								if ( (ret = sigqueue(web_pid, SIGUSR2, auth)) < 0) {
+									fprintf(stderr,"error in signal %d\n",errno);fflush(stderr);}
+								else 
+									fprintf(stderr,"signal sent\n");fflush(stderr);									
+							}
+							dtlsStep = DONE;
+						}
 						break;
 					default:
 						ret = -1; //error
@@ -386,8 +425,8 @@ int processSecCTP(int sock) {
 		msg = NULL;
 	}
 	
-	if (!authorized) //Failed at any step
-		mq_send(mq, NOT_AUTH, MAX_SIZE, 0);
+	if (dtlsStep == DONE && !authorized) //Failed at any step
+		mq_send(mq_snd, NOT_AUTH, MAX_SIZE, 0);
 	
 	return ret;
 }

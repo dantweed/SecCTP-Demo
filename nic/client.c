@@ -106,7 +106,7 @@ int main(int argc, char *argv[]) {
 			on_error("Error opening queue %d", errno);	
 		if ( (mq_recv = mq_open(RECVQUEUE, O_RDONLY | O_CREAT, 0644, &attr)) == (mqd_t) -1) 
 			on_error("Error opening queue %d", errno);	
-		if (fork() == 0) { /* If queue is open, run monitor app in a separate process */	
+		if (fork() == 0) { /* If queues open, run monitor app in a separate process */	
 			if ( (execl("active.exe", "active.exe", argv[1], SENDQUEUE, RECVQUEUE, (char*) 0)) < 0) 
 				on_error("Error opening active monitor");
 		}				
@@ -327,6 +327,8 @@ int processSecCTP(serverDetails *secCTPserver) {
 					fprintf(stderr,"dtls connected \n");fflush(stderr);
 					ret = sendDTLSmessage(msg, resp);
 						/* parse msg; if good, continue */ //FIXME HERE
+					if (ret > 0) 
+						fprintf(stderr,"response:\n%s \n",resp);fflush(stderr);
 					if ( ret > 0 && (ret = parseMessage(&contents, resp)) < 0) 
 						on_error("invalid response\n");					
 					if (contents.type == RESP && contents.status == OK) 
