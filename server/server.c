@@ -149,12 +149,14 @@ int main(int argc, char **argv)
 			
 			if (forever && sock > 0 )  /* else error on attempted connect */			
 				processSecCTP(sock);	
-			//close(listen_sd);
-			//listen_sd = socket(AF_INET, SOCK_DGRAM, 0);
-			//setsockopt(listen_sd, IPPROTO_IP, IP_MTU_DISCOVER,
-			//   (const void *) &optval, sizeof(optval));
-			//  if ( bind(listen_sd, (struct sockaddr *) &sa_serv, sizeof(sa_serv)) < 0)
-		//on_error("ERROR on binding server2 %d", errno);
+			if (secCTPstep == 1) {
+				
+				listen_sd = socket(AF_INET, SOCK_DGRAM, 0);
+				setsockopt(listen_sd, IPPROTO_IP, IP_MTU_DISCOVER,
+					(const void *) &optval, sizeof(optval));
+				if ( bind(listen_sd, (struct sockaddr *) &sa_serv, sizeof(sa_serv)) < 0)
+					on_error("ERROR on binding server2 %d", errno);
+			}
 		}
 		close(listen_sd);
 	}	
@@ -402,7 +404,9 @@ int processSecCTP(int sock) {
 								else 
 									fprintf(stderr,"signal sent\n");fflush(stderr);									
 							}
+							
 							dtlsStep = DONE;
+														
 						}
 						break;
 					default:
@@ -414,11 +418,12 @@ int processSecCTP(int sock) {
 			ret = -1; //error
 	}//outer switch	
 	
-	if (secCTPstep > 1 && dtlsStep> 1) {
-		//close(sock);
-		secCTPstep = 1; //Reset outer switch condition
+	//End transaction and clean up
+	if (secCTPstep > 1 && (dtlsStep> 1 || dtlsStep == DONE) ) {
+		secCTPstep = 1; //Reset outer switch condition 
+		close(sock);		
 		gnutls_bye(session, GNUTLS_SHUT_WR);
-		gnutls_deinit(session);
+		gnutls_deinit(session);			
 	}
 	if (msg) {
 		free(msg);
