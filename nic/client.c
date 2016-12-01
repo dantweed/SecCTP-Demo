@@ -30,9 +30,9 @@
 #define on_error(...) {fprintf(stderr, __VA_ARGS__); fflush(stderr); return EXIT_FAILURE;}
 
 #define LISTENPORT 5555 	//For incoming notifications from User PC
-//defaults for testing TODO: Update to handle arbitrary port, server IP
-#define SECCTPPORT  5557
-#define SECCTPSERVER  "127.0.0.1" 
+
+#define SECCTPPORT  5557  //Assume defined standard port
+
 
 #define MAX_BUF 1024
 #define PWD_LENGTH 160
