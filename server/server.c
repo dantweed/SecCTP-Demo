@@ -32,7 +32,6 @@
 #define WEB_DIR "webserver"
 
 #define MAX_BUF 1024
-#define PORT 5557
 #define WEBPORT "8888"
 #define DONE -1
 
@@ -72,24 +71,27 @@ int processSecCTP(int sock);
 void sigHandler(int sig);
 int web_pid;
 
+int secCTPport;
+
 int main(int argc, char **argv)
 {
 	int listen_sd;
-	int sock, port;
+	int sock;
 	int optval;
 	char *webport;
 	struct sockaddr_in sa_serv;
 	struct sockaddr_in clientaddr; 	
 	socklen_t clientlen = sizeof(clientaddr);	 
-	if (argc != 3) {
-		port = PORT;
+	if (argc != 2) {
+		secCTPport = atoi(DEFAULT_SECCTP_PORT);
 		webport = WEBPORT;
 	}
 	else {
-		port = atoi(argv[1]);	
+		secCTPport = atoi(argv[1]);	
 		webport = argv[2];
 	}
-	fprintf(stderr,"server set webport %s\n", webport);
+	debug_message("server set webport %s\n", webport);
+	
 	struct mq_attr attr;	
 	 /* initialize the queue attributes */
     attr.mq_flags = 0;
@@ -107,7 +109,8 @@ int main(int argc, char **argv)
 		if ( (execl("web.exe", "web.exe", webport, SENDQUEUE, RECVQUEUE, (char*) 0)) < 0) 
 			on_error("Error start webserver %d", errno);
 	}
-	printf("web %d\n", web_pid);
+	debug_message("web %d\n", web_pid);
+	
 	struct sigaction act;
 	memset(&act, 0, sizeof(act));
 	act.sa_handler = &sigHandler;
@@ -124,7 +127,7 @@ int main(int argc, char **argv)
 	memset(&sa_serv, '\0', sizeof(sa_serv));
 	sa_serv.sin_family = AF_INET;
 	sa_serv.sin_addr.s_addr = INADDR_ANY;
-	sa_serv.sin_port = htons(port);
+	sa_serv.sin_port = htons(secCTPport);
 
 	{ /* DTLS requires the IP don't fragment (DF) bit to be set */
 #if defined(IP_DONTFRAG)
@@ -141,11 +144,11 @@ int main(int argc, char **argv)
 	setsockopt(listen_sd, SOL_SOCKET, SO_REUSEADDR, &(int){ 1 }, sizeof(int));
 	if ( bind(listen_sd, (struct sockaddr *) &sa_serv, sizeof(sa_serv)) < 0)
 		on_error("ERROR on binding server 1%d", errno);
-	printf("UDP server ready. Listening to port '%d'.\n\n", port);
+	printf("SecCTP server ready. Listening to port '%d'.\n\n", secCTPport);
 	while (forever) {
 		
 		for (;forever;) {			
-			printf("Waiting for connection...\n");			
+			debug_message("Waiting for connection...\n");
 			sock = wait_for_connection(listen_sd);		
 			
 			if (forever && sock > 0 )  /* else error on attempted connect */			
@@ -195,57 +198,61 @@ int processSecCTP(int sock) {
 	int mtu = 1400;
 	unsigned char sequence[8];	
 	int authorized = 0;
-	fprintf(stderr,"before server while, fd %d CTPstep %d dtlsStep %d\n",sock,secCTPstep,dtlsStep);fflush(stderr);	
-		
+	
+	
+	debug_message("before server while, fd %d CTPstep %d dtlsStep %d\n",sock,secCTPstep,dtlsStep)		
 	switch(secCTPstep) {
 		case 1: /* Expect unsecured hello message */ 	
 			if (!msg) msg = (char*)calloc(MAX_BUF, sizeof(char));
 			ret = recvfrom(sock, buffer, sizeof(buffer)-1, 0,
 				   (struct sockaddr *) &cli_addr,
 				   &cli_addr_size);
-				   fprintf(stderr,"recvd,\n%s\n",buffer);fflush(stderr);
+				   debug_message("recvd,\n%s\n",buffer)
 				  
 			if (ret > 0) {
 					   // check if valid hello
 					   /* parse msg; if good, continue */ 
 				if ( (ret = parseMessage(&contents, buffer)) < 0) 
-					on_error("invalid hello: server\n");
+					on_error("Invalid hello: server\n");
 				
 				if (contents.type == HELLO ) { //Assume compatabilty for now
 					if ( (ret =  generateResp(msg, OK, NULL, NULL)) > 0 ) {		
-						fprintf(stderr,"server resp\n %s\n",msg);fflush(stderr);				
+						debug_message("server resp\n %s\n",msg);
 						if ( (ret = sendto(sock, msg, strlen(msg), 0, (struct sockaddr *) &cli_addr,cli_addr_size)) > 0)   {            
 							secCTPstep = 2;					
-						} else 
-							fprintf(stderr,"error sending resp \n");fflush(stderr);
-					} else 
-						fprintf(stderr,"error generating resp \n");fflush(stderr);
+						} else  {
+							on_error("Error sending resp \n");
+						}
+					} else {
+						on_error("Errror generating resp \n");
+					}
 				}
 				else {
-					fprintf(stderr,"error in hello recv %d\n", contents.type);fflush(stderr);	
+					on_error("Error in hello recv %d\n", contents.type);	
 					ret = -1;	
 				}			
 			}
-			//close(sock);
+			
 			if (msg) {
 				free(msg);
 				msg = NULL;
 			}
-			fprintf(stderr,"end of init hello ret %d CTPstep %d\n",msg,secCTPstep);fflush(stderr);
 			
+			debug_message("end of init hello ret %d CTPstep %d\n",msg,secCTPstep);			
 			break;
+			
 		case 2: /* DTLS transaction */		
 			dtlsStep = 1;				
 			while (dtlsStep <= 4 && dtlsStep != DONE && ret >= 0) {	
 				switch(dtlsStep) {
 					case 1: /* DTLS Handshake */
-					fprintf(stderr,"in handshake\n",buffer);fflush(stderr);		
+					debug_message("in handshake\n",buffer);
 						ret = recvfrom(sock, buffer, sizeof(buffer), MSG_PEEK,
 								(struct sockaddr *) &cli_addr,
 								&cli_addr_size);
 						if (ret > 0) {	
 							buffer[ret] = '\0';
-							fprintf(stderr,"1st dtls msg\n%s\n",buffer);fflush(stderr);		
+							debug_message("1st dtls msg\n%s\n",buffer);
 							/* dtls session and cookie setup */ 
 							memset(&prestate, 0, sizeof(prestate));
 							ret =
@@ -274,10 +281,13 @@ int processSecCTP(int sock) {
 										 (struct sockaddr *) &cli_addr,
 										 &cli_addr_size);
 								usleep(100);
-								continue;  //loop around and wait for valid cookie on next attempt (might need to limit this)
+								continue; 
 							}							
-						} else
+						} else {
+							dtlsStep = DONE;
 							break; //error on recieve to start handshake
+						}
+							
 						//If otherwise good, move on to DTLS set up and handshake
 							/* Set up GnuTLS for current session  */ 
 						gnutls_init(&session, GNUTLS_SERVER | GNUTLS_DATAGRAM);
@@ -305,12 +315,12 @@ int processSecCTP(int sock) {
 
 						if (ret < 0) {
 							fprintf(stderr, "Error in handshake(%d): %s\n", ret,
-									gnutls_strerror(ret));		
+									gnutls_strerror(ret));	 //Print error msg, but don't die	
 							dtlsStep = DONE;			
 						} 
 						else 
 							dtlsStep = 2;
-						fprintf(stderr,"after handshake ret %d\n",ret);fflush(stderr);	
+						debug_message("after handshake ret %d\n",ret);	
 						break;
 								
 					/* Actual message passing*/
@@ -332,14 +342,14 @@ int processSecCTP(int sock) {
 
 						if (ret > 0) {
 							buffer[ret] = 0;
-							fprintf(stderr,"2nd dtls msg\n%s\n",buffer);fflush(stderr);	
+							debug_message("2nd dtls msg\n%s\n",buffer);
 							if ( (ret = parseMessage(&contents, buffer)) < 0) 
 								on_error("invalid message");
 			
 							if (contents.type == HELLO ) { //Assume compatabilty for now
 								if (!msg) msg = (char*)calloc(MAX_BUF, sizeof(char));
 								if ( (ret =  generateResp(msg, OK, NULL, NULL)) > 0 ) {
-									fprintf(stderr,"dtls resp\n%s\n",msg);fflush(stderr);	
+									debug_message("dtls resp\n%s\n",msg);
 									if ( ( ret = gnutls_record_send(session, msg, strlen(msg)) ) > 0 ) 									
 										dtlsStep = 3;					
 								}
@@ -347,7 +357,7 @@ int processSecCTP(int sock) {
 							else 
 								ret = -1;								
 						}
-						fprintf(stderr,"after step2 ret %d\n",ret);fflush(stderr);								
+						debug_message("after step2 ret %d\n",ret);
 						break;
 					case 3: /* Authentication */ 
 						do {
@@ -368,15 +378,16 @@ int processSecCTP(int sock) {
 						if (ret > 0) {
 							buffer[ret] = 0;
 							if ( (ret = parseMessage(&contents, buffer)) < 0) 
-								on_error("invalid message");
+								on_error("invalid message from client");
 							
-							fprintf(stderr,"3rd dtls msg\n%s\n",buffer);fflush(stderr);	
+							debug_message("3rd dtls msg\n%s\n",buffer);
 							if (contents.type == REQ ) { //TODO: validation of credentials
 								//For now
 								authorized = 1;
-								if (!msg) msg = (char*)calloc(MAX_BUF, sizeof(char));
+								if (!msg) 
+									msg = (char*)calloc(MAX_BUF, sizeof(char));
 								if ( (ret =  generateResp(msg, OK, NULL, NULL)) > 0 ) {
-									fprintf(stderr,"dtls resp\n%s\n",msg);fflush(stderr);	
+									debug_message("dtls resp\n%s\n",msg);
 									if ( ( ret = gnutls_record_send(session, msg, strlen(msg)) ) > 0 ) 									
 										dtlsStep = 4;					
 									else
@@ -386,29 +397,28 @@ int processSecCTP(int sock) {
 							else 
 								ret = -1;								
 						}	
-						fprintf(stderr,"after step3 ret %d\n",ret);fflush(stderr);							
+						debug_message("End step3 ret %d\n",ret);
 						break;						
 					case 4: 
-						fprintf(stderr,"in final step ret %d auth %d\n",ret,authorized);fflush(stderr);	
+						debug_message("Final SecCTP step ret %d auth %d\n",ret,authorized);
 						//pass back to webserver the authentication status												
 						if (authorized) {
 							ret = mq_send(mq_snd, AUTHORIZED, strlen(AUTHORIZED), 0);						
 												
-							fprintf(stderr,"msg sent %d\n", ret);fflush(stderr);	
-							if (ret < 0) {
-								fprintf(stderr,"error in send %d\n", errno);fflush(stderr);	}
-							else {
+							debug_message("msg sent %d\n", ret);
+							if (ret < 0) {  
+								on_error("Error in send %d\n", errno); 
+							} else {
 								union sigval auth;
 								auth.sival_int = authorized;	
 								
 								if ( (ret = sigqueue(web_pid, SIGUSR2, auth)) < 0) {
-									fprintf(stderr,"error in signal %d\n",errno);fflush(stderr);}
-								else 
-									fprintf(stderr,"signal sent\n");fflush(stderr);									
-							}
-							
-							dtlsStep = DONE;
-														
+									on_error("error in signal %d\n",errno);
+								} else {
+									debug_message("signal sent\n");	
+								}
+							}							
+							dtlsStep = DONE;														
 						}
 						break;
 					default:

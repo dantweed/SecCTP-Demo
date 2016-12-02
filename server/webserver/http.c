@@ -21,6 +21,8 @@
 #include <signal.h>
 #include <errno.h>
 
+//#define DEBUG
+
 #define ERROR_PAGE "<html><head><title>Error</title></head><body>Error</body></html>"
 #define WORKING "<html><head><title>Processing</title></head><body>Processing request...</body></html>"
 
@@ -37,7 +39,6 @@ static int generate_page (void *cls,
    const char *upload_data,
    size_t *upload_data_size, void **ptr);
    
-
 static struct MHD_Response *error_response;
 static struct MHD_Response *working_response;
 static volatile int resume = 0;
@@ -48,22 +49,20 @@ mqd_t mq_snd; //For use later in server initiated transactions
 
 static struct MHD_Response *queued_response;
 static struct MHD_Connection *pending;
-
 static int suspend = 0;	
 
 int main (int argc, char **argv) {
 	struct MHD_Daemon *daemon;	
 	
 	if (argc != 4) {
-		printf("Usage: %s <port> <send mqueue name> <recv mqueue name> \n",argv[0]);
+		printf("Usage: %s <webport> <send mqueue name> <recv mqueue name> \n",argv[0]);
 		return EXIT_FAILURE;
 	} 
 			
 	if ( (mq_rcv = mq_open(argv[2], O_RDONLY)) == (mqd_t) -1 || (mq_snd = mq_open(argv[3], O_WRONLY)) == (mqd_t) -1) 
 		on_error("queue does not exist");
 		
-			
-	int port = atoi(argv[1]);
+	int webport = atoi(argv[1]);
 		
 	struct sigaction actTerm, actQueue;
 	memset(&actTerm, 0, sizeof(actTerm));
@@ -83,22 +82,23 @@ int main (int argc, char **argv) {
 		MHD_create_response_from_buffer (strlen (ERROR_PAGE),(void *) ERROR_PAGE, MHD_RESPMEM_PERSISTENT); 
 	working_response = 
 		MHD_create_response_from_buffer (strlen (WORKING),(void *) WORKING, MHD_RESPMEM_PERSISTENT);  
-	if (MHD_add_response_header(working_response, "SecCTP", "5557") == MHD_NO) {
-				fprintf(stderr,"error adding header");fflush(stderr);	}
 	
-	daemon = MHD_start_daemon (MHD_USE_SELECT_INTERNALLY|MHD_USE_SUSPEND_RESUME|MHD_USE_DEBUG, port, NULL, 
+	if (MHD_add_response_header(working_response, "SecCTP", DEFAULT_SECCTP_PORT) == MHD_NO) 
+				on_error("error adding header");
+	
+	daemon = MHD_start_daemon (MHD_USE_SELECT_INTERNALLY|MHD_USE_SUSPEND_RESUME|MHD_USE_DEBUG, webport, NULL, 
 					NULL, &generate_page, NULL,  MHD_OPTION_END);
 
 	if (NULL == daemon)
 		on_error("Error starting daemon");	
-	while(forever);
+	while(forever && daemon);
 	
-	MHD_stop_daemon (daemon);	
+	if (daemon) MHD_stop_daemon (daemon);	
 	
 	return EXIT_SUCCESS	;
 }
 
-static int generate_page (void *cls,
+static int generate_page (void *cls, 
    struct MHD_Connection *connection,
    const char *url,
    const char *method,
@@ -112,8 +112,7 @@ static int generate_page (void *cls,
 	int fd;
 	struct stat buf;
 	
-	int main = 0;
-		
+	int main = 0;		
 	
 	if ( (0 != strcmp (method, MHD_HTTP_METHOD_GET)) &&  
 		(0 != strcmp (method, MHD_HTTP_METHOD_HEAD)) ) 			
@@ -149,14 +148,16 @@ static int generate_page (void *cls,
 	}
 	else if (!main && !suspend){	
 		suspend = 1;			
-		fprintf(stderr,"queuing 102 resp\n");fflush(stderr);
+		debug_message("queuing 102 resp\n");
+		
 		char *location = (char*) calloc(MAX_SIZE, sizeof(char));
 		sprintf(location, "%s/%s", HOSTNAME, url);
-		if (MHD_add_response_header(working_response, "Location", url) == MHD_NO) {
-			fprintf(stderr,"error adding header");fflush(stderr);	}		
+		
+		if (MHD_add_response_header(working_response, "Location", url) == MHD_NO) 
+			on_error("error adding header");
 		if (MHD_queue_response (connection, MHD_HTTP_SEE_OTHER, working_response)== MHD_NO)
-				fprintf(stderr,"error queueing 102 with header");fflush(stderr);
-		fprintf(stderr,"102 resp queued, waiting for auth\n");fflush(stderr);			
+			on_error("error queueing 303 with header");
+		debug_message("Re-direct for auth resp queued, waiting for auth\n");
 		close(fd);
 	}
 	else if (suspend && (NULL != (response = MHD_create_response_from_fd (buf.st_size, fd))) ) {
@@ -166,16 +167,17 @@ static int generate_page (void *cls,
 		int bytes_rcvd;	
 		
 		//Wait on server auth
-		if ( (bytes_rcvd = mq_receive(mq_rcv, buffer, MAX_SIZE, NULL) ) < 0) {
-			fprintf(stderr,"queue error %d",errno);fflush(stderr);}
+		if ( (bytes_rcvd = mq_receive(mq_rcv, buffer, MAX_SIZE, NULL) ) < 0) 
+			on_error("Queue error %d",errno);fflush(stderr);
+			
 		buffer[bytes_rcvd] = '\0';
-		fprintf(stderr,"queue msg: %s$ \n",buffer);fflush(stderr);
+		debug_message("Queue msg: %s$ \n",buffer);
 		if (strncmp(buffer, AUTHORIZED, strlen(AUTHORIZED)) == 0 ) {
-			if ( MHD_queue_response (connection, MHD_HTTP_OK, response) == MHD_NO) {
-				fprintf(stderr,"error in queue auth resp\n");fflush(stderr);}
+			if ( MHD_queue_response (connection, MHD_HTTP_OK, response) == MHD_NO) 
+				on_error("Error in queue auth resp\n");
 		} else {			
-			if ( MHD_queue_response (connection, MHD_HTTP_FORBIDDEN, error_response) == MHD_NO) {
-				fprintf(stderr,"error in queue not resp\n");fflush(stderr);}
+			if ( MHD_queue_response (connection, MHD_HTTP_FORBIDDEN, error_response) == MHD_NO) 
+				on_error("Error in queue not resp\n")
 		}			
 		MHD_destroy_response(response);
 			
@@ -183,7 +185,8 @@ static int generate_page (void *cls,
 	else {
 		/* internal error */
 		(void) close (fd);
-		return MHD_queue_response (connection, 	MHD_HTTP_BAD_REQUEST, error_response);
+		return MHD_queue_response (connection, 	MHD_HTTP_INTERNAL_SERVER_ERROR, error_response);
+		debug_message("Internal server error");
 	}	
 	
 	return ret;

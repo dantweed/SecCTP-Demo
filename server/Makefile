@@ -1,4 +1,4 @@
-all:web server
+all:server web
 
 web:
 	gcc -o webserver/web.exe webserver/http.c -lmicrohttpd -lrt 
