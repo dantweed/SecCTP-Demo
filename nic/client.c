@@ -56,8 +56,9 @@ typedef struct serverDetails{
 
 int udp_connect(int port, const char *server);
 int initgnutls(void);
+int reInitgnutls(void);
 int dtls_connect(serverDetails *secCTPserver);
-void dtls_deinit();
+void dtls_deinit(void);
 int sendDTLSmessage(char *msg, char *resp);
 int processSecCTP(serverDetails *secCTPserver);
 int validateServer(serverDetails *secCTPserver);
@@ -202,7 +203,7 @@ int main(int argc, char *argv[]) {
 	return EXIT_SUCCESS;
 }
 
-/* Validats that this is an active session and validates server details */
+/* Validates that this is an active session and validates server details */
 int validateServer(serverDetails *secCTPserver) {
 	struct addrinfo *res= NULL, *p, hints;
 	int ret;
@@ -317,13 +318,13 @@ int processSecCTP(serverDetails *secCTPserver) {
 				
 				if (contents.type == RESP && contents.status == OK) {
 					step = 2;
-					close(sd);  //FIXME: Workaround to avoid direct upgrade on open socket
+					close(sd);  
 				}
 				else 
 					ret = -1;
 				break;
-			case 2: /* Send DTLS hello message */
-				if ( (sd = dtls_connect(secCTPserver)) > 0) {
+			case 2: /* Send DTLS hello message */				
+				if ((sd = dtls_connect(secCTPserver)) > 0) {
 					fprintf(stderr,"dtls connected \n");fflush(stderr);
 					ret = sendDTLSmessage(msg, resp);
 						/* parse msg; if good, continue */ //FIXME HERE
@@ -365,7 +366,7 @@ int processSecCTP(serverDetails *secCTPserver) {
 				break;
 			case 4: 
 			/* returning control to user PC */ 
-			//TODO
+			
 				step = DONE;
 				break;
 		}
@@ -373,14 +374,18 @@ int processSecCTP(serverDetails *secCTPserver) {
 	/* clean up and close */ 	
 	fprintf(stderr,"before bye %d\n",ret);fflush(stderr);	
 	ret = gnutls_bye(session, GNUTLS_SHUT_WR); //0 is success
+	fprintf(stderr,"after bye %d\n",ret);fflush(stderr);	
+	gnutls_deinit(session);
+	ret = reInitgnutls();
+	fprintf(stderr,"after deinit %d\n",ret);fflush(stderr);	
 	if (msg) 
 		free (msg);     
-	close(sd);
+	close(sd);	
    	return ret;
 }
 
 /*Only handles authentication for now */
-int userIO (char *resp, char *hostname){  //userIO)char *resp, char *hostname, int transType)
+int userIO (char *resp, char *hostname){  //userIO (char *resp, char *hostname, int transType)
 	int ret = -1;
 	char uname[UNAME_LENGTH];
 	char pwd[PWD_LENGTH];
@@ -411,6 +416,7 @@ int dtls_connect(serverDetails *secCTPserver){
 	int secCTPsd;	
 
 		/* Set the X.509 credentials to the current session */ 
+		
 	ret = gnutls_credentials_set(session, GNUTLS_CRD_CERTIFICATE, xcred);
 	if (ret < 0)  return ret;
 	
@@ -493,9 +499,18 @@ int initgnutls(){
 	return ret;
 }
 
+int reInitgnutls() {
+	int ret;
+	    /* Initialize TLS session */
+    ret = gnutls_init(&session, GNUTLS_CLIENT | GNUTLS_DATAGRAM);
+	if (ret >= 0)         /* Use default priorities */
+		ret = gnutls_set_default_priority(session);      
+    return ret;
+}
+
 /* clean and close gnutls stuff */
-void dtls_deinit() {
-	if (session) gnutls_deinit(session);
+void dtls_deinit() {	
+	gnutls_deinit(session);
 	gnutls_certificate_free_credentials(xcred);
 	gnutls_global_deinit();
 }

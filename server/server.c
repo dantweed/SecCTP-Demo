@@ -137,7 +137,8 @@ int main(int argc, char **argv)
 			   (const void *) &optval, sizeof(optval));
 #endif
 	}
-
+	
+	setsockopt(listen_sd, SOL_SOCKET, SO_REUSEADDR, &(int){ 1 }, sizeof(int));
 	if ( bind(listen_sd, (struct sockaddr *) &sa_serv, sizeof(sa_serv)) < 0)
 		on_error("ERROR on binding server 1%d", errno);
 	printf("UDP server ready. Listening to port '%d'.\n\n", port);
@@ -154,6 +155,7 @@ int main(int argc, char **argv)
 				listen_sd = socket(AF_INET, SOCK_DGRAM, 0);
 				setsockopt(listen_sd, IPPROTO_IP, IP_MTU_DISCOVER,
 					(const void *) &optval, sizeof(optval));
+				setsockopt(listen_sd, SOL_SOCKET, SO_REUSEADDR, &(int){ 1 }, sizeof(int));
 				if ( bind(listen_sd, (struct sockaddr *) &sa_serv, sizeof(sa_serv)) < 0)
 					on_error("ERROR on binding server2 %d", errno);
 			}
