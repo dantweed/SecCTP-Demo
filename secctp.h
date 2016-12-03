@@ -11,6 +11,11 @@
 	#define NULL 0
 #endif
 
+#define PWD_LENGTH 20
+#define UNAME_LENGTH 20
+#define MAX_CRED_LENGTH (UNAME_LENGTH+PWD_LENGTH)
+#define DEFAULT_CREDS "secctp:pass"
+#define AUTH_TAG "Authorization: Basic "
 
 #define MAX_HEADER_SIZE 8096 //8K is Apache max, others 16K (much larger than needed, optimize later)
 
@@ -69,6 +74,7 @@ int generateReq(char *msg, char *method, char *uri,char *headers, char *body);
 int generateResp(char *msg, int status_code,char *headers, char *body);
 
 int parseMessage(msgContents *contents, char *msg);
+int authorization(char *headers);
 
 #endif //#ifndef SECCTP_H
 

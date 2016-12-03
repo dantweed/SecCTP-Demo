@@ -111,8 +111,7 @@ int parseMessage(msgContents *contents, char *msg) {
 	char *tok;
 	char *infoline;
 	char *headers;
-	int count = 0; 
-	
+	int count = 0; 	
 	
 	if (msg != NULL) { /* else msg is not a valid pointer */
 		/* extract info line */
@@ -132,6 +131,7 @@ int parseMessage(msgContents *contents, char *msg) {
 					tok = strtok(NULL, "\r\n");
 				}
 				contents->headers = headers;
+				
 				/* extract body if exists, otherwise will set to NULL */
 				contents->body = strtok(NULL, "\r\n");
 			
@@ -155,9 +155,7 @@ int parseMessage(msgContents *contents, char *msg) {
 						contents->type = RESP;
 						contents->version = toks[0];
 						char *end_ptr; 
-						int code = strtol(toks[1], &end_ptr, 10);
-						fprintf(stderr,"resp tok1 %s\ncode=%d\n",toks[1],code);fflush(stderr);												
-							
+						int code = strtol(toks[1], &end_ptr, 10);							
 						if check_code(code) {/* if valid, set return flag */
 							contents->status = code;
 							ret = 0;		
@@ -173,5 +171,19 @@ int parseMessage(msgContents *contents, char *msg) {
 		}
 	}
 	
+	return ret;
+}
+
+/* For now assume credentials are secctp:pass */
+int authorization(char *headers) {
+	int ret = 0;
+	char creds[MAX_CRED_LENGTH];
+	
+	if (headers) { //TODO:  Change to authentication against list/dbase of credentials
+		if (sscanf(strstr(headers, AUTH_TAG)+strlen(AUTH_TAG) ,"%s\r\n%*s",creds) > 0
+				&& strlen(DEFAULT_CREDS) == strlen(creds) ) {
+			ret = (strncmp(DEFAULT_CREDS, creds, strlen(DEFAULT_CREDS)) == 0);				
+		}			
+	}	
 	return ret;
 }

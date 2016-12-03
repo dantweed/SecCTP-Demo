@@ -24,6 +24,7 @@
 //#define DEBUG
 
 #define ERROR_PAGE "<html><head><title>Error</title></head><body>Error</body></html>"
+#define UNAUTH "<html><head><title>Unauthorized</title></head><body>Invalid credentials supplied</body></html>"
 #define WORKING "<html><head><title>Processing</title></head><body>Processing request...</body></html>"
 
 #define HOSTNAME "localhost"
@@ -41,14 +42,14 @@ static int generate_page (void *cls,
    
 static struct MHD_Response *error_response;
 static struct MHD_Response *working_response;
+static struct MHD_Response *forbidden_response;
 static volatile int resume = 0;
 static volatile int forever = 1;
 static volatile int data = 0;
 mqd_t mq_rcv;
 mqd_t mq_snd; //For use later in server initiated transactions
 
-static struct MHD_Response *queued_response;
-static struct MHD_Connection *pending;
+
 static int suspend = 0;	
 
 int main (int argc, char **argv) {
@@ -82,7 +83,8 @@ int main (int argc, char **argv) {
 		MHD_create_response_from_buffer (strlen (ERROR_PAGE),(void *) ERROR_PAGE, MHD_RESPMEM_PERSISTENT); 
 	working_response = 
 		MHD_create_response_from_buffer (strlen (WORKING),(void *) WORKING, MHD_RESPMEM_PERSISTENT);  
-	
+	forbidden_response =
+		MHD_create_response_from_buffer (strlen (UNAUTH),(void *) UNAUTH, MHD_RESPMEM_PERSISTENT);  
 	if (MHD_add_response_header(working_response, "SecCTP", DEFAULT_SECCTP_PORT) == MHD_NO) 
 				on_error("error adding header");
 	
@@ -176,7 +178,7 @@ static int generate_page (void *cls,
 			if ( MHD_queue_response (connection, MHD_HTTP_OK, response) == MHD_NO) 
 				on_error("Error in queue auth resp\n");
 		} else {			
-			if ( MHD_queue_response (connection, MHD_HTTP_FORBIDDEN, error_response) == MHD_NO) 
+			if ( MHD_queue_response (connection, MHD_HTTP_FORBIDDEN, forbidden_response) == MHD_NO) 
 				on_error("Error in queue not resp\n")
 		}			
 		MHD_destroy_response(response);

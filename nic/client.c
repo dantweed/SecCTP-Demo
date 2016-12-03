@@ -1,4 +1,3 @@
-
 #ifdef HAVE_CONFIG_H
 #include <config.h>
 #endif
@@ -20,39 +19,18 @@
 #include <signal.h>
 #include <errno.h>
 
-//TODO: move to curses UI instead of stdin
-//#include <ncurses.h>
+//#define DEBUG
 
 #include "../secctp.h" //Message definitions, etc 
 #include "nic.h"	//defines for ipc communication
+#include "client.h"
 
+//TODO: move to curses UI instead of stdin
+//#include <ncurses.h>
 //TODO: after moving to curses UI, update all error handling
-#define on_error(...) {fprintf(stderr, __VA_ARGS__); fflush(stderr); return EXIT_FAILURE;}
-
-#define LISTENPORT 5555 	//For incoming notifications from User PC
-
-#define SECCTPPORT  5557  //Assume defined standard port
-
-
-#define MAX_BUF 1024
-#define PWD_LENGTH 160
-#define UNAME_LENGTH 20
-#define CRED_LENGTH (UNAME_LENGTH+PWD_LENGTH)
-#define SENDQUEUE "/nic_queue_send"
-#define RECVQUEUE "/nic_queue_recv"
-#define CAFILE "./certs/cert.pem"  //TODO:generate new certs for distributed example
-#define MSG_TOKENS 4
-#define DONE -1
 
 gnutls_session_t session;
 gnutls_certificate_credentials_t xcred;
-
-typedef struct serverDetails{
-	char * hostname;
-	char * resource;
-	char * addr;
-	int port;	
-} serverDetails;
 
 int udp_connect(int port, const char *server);
 int initgnutls(void);
@@ -145,12 +123,12 @@ int main(int argc, char *argv[]) {
     				
 	/* Main loop */
 	clientlen = sizeof(clientaddr);	
-	while (forever) { /* Always be listening */ 	  //TODO: make multi-threaded and handling server initiated requests				
+	while (forever) { /* Always be listening */ 	  //TODO: Expand to handle server initiated requests				
 		
-		fprintf(stderr,"before accept %d\n", childfd);fflush(stderr);
+		debug_message("Waiting for msg from user PC\n", childfd);
 		if ( (childfd = accept(parentfd, (struct sockaddr *) &clientaddr, &clientlen)) < 0 && forever) 
 			on_error("ERROR on accept %d\n", errno);	
-		fprintf(stderr,"after accept %d\n", childfd);fflush(stderr);
+		debug_message("Rec'd mesg from user PC %d\n", childfd);
 		if (forever && childfd > 0) { //Covers case of sig interupt out of accept block
 		/* On accept, kill synergy for now and get request details 
 			fprintf(stderr,"killing syn\n");fflush(stderr);
@@ -169,9 +147,9 @@ int main(int argc, char *argv[]) {
 				on_error("Invalid server or request\n");
 			
 			//Outcome of SecCTP transaction
-			fprintf(stderr,"before secctp \n");fflush(stderr);
+			debug_message("Begin secctp processing\n");
 			if (forever && (ret = processSecCTP(&secCTPserver)) < 0) {
-				fprintf(stderr,"after secctp %d\n",ret);fflush(stderr);
+				on_error("after secctp %d\n",ret);
 				break; //error condition
 				
 			}
@@ -190,7 +168,7 @@ int main(int argc, char *argv[]) {
 	mq_send(mq_snd, MSG_DIE, strlen(MSG_DIE), 0);
 	
 	/* Clean up */ 	
-	fprintf(stderr,"Clean up"); fflush(stderr);
+	debug_message("Clean up queues and fd's"); 
 	mq_close(mq_snd);
 	mq_close(mq_recv);
 	mq_unlink(SENDQUEUE);
@@ -219,15 +197,15 @@ int validateServer(serverDetails *secCTPserver) {
 	hints.ai_socktype = SOCK_STREAM;
 	
 	if ((ret = getaddrinfo(secCTPserver->hostname, NULL, &hints, &res)) != 0) 
-		on_error("getaddrinfo: %s\n", gai_strerror(ret));		
+		on_error("Error getting addr info: %s\n", gai_strerror(ret));		
 	
-	
-	for(p = res;p != NULL && result != 0 ; p = p->ai_next) {
-		fprintf(stderr,"in for %d\n",result); fflush(stderr);
+	debug_message("Server address: %s\n",secCTPserver->addr);
+	for(p = res;p != NULL && result != 0 ; p = p->ai_next) {		
 		if (p->ai_family == AF_INET) { // IPv4			
 			struct sockaddr_in *ipv4 = (struct sockaddr_in *)p->ai_addr;
 			inet_ntop(AF_INET, &(ipv4->sin_addr), ipstrComp, INET_ADDRSTRLEN);			
 			result = strncmp(ipstrComp, secCTPserver->addr, INET_ADDRSTRLEN);			
+			debug_message("ipstrComp address: %s\n",ipstrComp);
 		} // else ignore IPv6 for now			
 	}
 
@@ -236,35 +214,35 @@ int validateServer(serverDetails *secCTPserver) {
 	if (result == 0) {
 		/* check if valid active connection */
 		strncpy(buffer, secCTPserver->addr, INET_ADDRSTRLEN);
-		fprintf(stderr,"buffer  %s\n", buffer); fflush(stderr);
+		debug_message("SecCTP server addr  %s\n", buffer);
 		mq_send(mq_snd, buffer, strlen(buffer), 0);
 		/* wait for response */
-		fprintf(stderr,"waiting for resp\n"); fflush(stderr);
+		debug_message("Waiting for validation\n");
 		bytesRcvd = mq_receive(mq_recv, buffer, MAX_SIZE, NULL);			
 		buffer[bytesRcvd] = '\0';
-		fprintf(stderr,"buffer after %s\n", buffer); fflush(stderr);
+		debug_message("Response buffer %s\n", buffer);
 		if (strncmp(buffer, FOUND, strlen(FOUND)) != 0)
-			result = -1; //Error
+			result = -1; //Error: server not found in active connection list
 	}	
-	fprintf(stderr,"end of validate %d\n", result); fflush(stderr);
+	debug_message("End of server validation %d\n", result); 
 	return result;
 	
 }
 
-int parseUserPCmsg(serverDetails *secCTPserver, char *buf){	
+int parseUserPCmsg(serverDetails *secCTPserver, char *buf){	//TODO: update message format
 	int count = 0;
-	char *pch = strtok(buf, "/");
+	char *pch = strtok(buf, "-");
 	
-/* msg format to be hostname/resource-ipaddress:port (i.e. four tokens)*/	
-
+/* msg format to be hostname-address:port (i.e. 3 tokens)*/	
+//
 	if (pch != NULL) {
 		secCTPserver->hostname = pch;
 		count++;		
-		pch = strtok(NULL, "-");		
-		if (pch != NULL) {			
-			secCTPserver->resource = pch;
-			count++;			
-			pch = strtok(NULL, ":");			
+		pch = strtok(NULL, ":");		
+	//	if (pch != NULL) {			
+	//		secCTPserver->resource = pch;
+	//		count++;			
+	//		pch = strtok(NULL, ":");			
 			if (pch != NULL) {				
 				secCTPserver->addr = pch;
 				count++;					
@@ -274,13 +252,13 @@ int parseUserPCmsg(serverDetails *secCTPserver, char *buf){
 					count++;					
 				}
 			}
-		}		
+	//	}		
 	} 		
 	return count;
 }
 
 /*will assume for now only a single trasnactions (i.e. is blocking) */
-/* TODO: Refactor to better structure, more functional error handling/recovery */ 
+
 int processSecCTP(serverDetails *secCTPserver) { 
 	char resp[MAX_BUF];
 	char *msg;	
@@ -291,30 +269,29 @@ int processSecCTP(serverDetails *secCTPserver) {
 	
 	struct sockaddr_in svraddr; 	
 	socklen_t svrlen = sizeof(svraddr);	
-	
-	fprintf(stderr,"in secctp \n");fflush(stderr);
+		
     msgContents contents;
     
     while (step < 4 && step != DONE && ret >= 0) {
-		fprintf(stderr,"client while, step %d\nport = %d\n",step,secCTPserver->port);fflush(stderr);
+		debug_message("processSecCTP while, step %d\nport = %d\n",step,secCTPserver->port);
 		switch(step) {
 			case 1:	/* Send unsecure hello message */
 				msg = (char*)malloc(MAX_BUF);
 				if ((ret = generateHello(msg, INFO, NULL, NULL)) < 0)
-					on_error("msg error on hello");
+					on_error("Error generating Hello");
 				if ((sd = udp_connect(secCTPserver->port, secCTPserver->addr)) < 0)
-					on_error("connection error on hello");	   
+					on_error("Connection error on initial Hello");	   
 				if ((n = send(sd, msg, strlen(msg), 0)) < 0)
-					on_error("ERROR in send hello");	
+					on_error("ERROR in send initial Hello");	
 				
 				/* block on wait for server's reply */				
 				if ( (n = recvfrom(sd, resp, MAX_BUF - 1, 0, (struct sockaddr *)&svraddr,  &svrlen)) < 0) 
-				  	on_error("ERROR in recv hello resp");
+				  	on_error("ERROR in recv initial Hello resp");
 				resp[n] = '\0';
-				fprintf(stderr,"resp(%d)= %s \n",n, resp);fflush(stderr);	
+				debug_message("Respone (%d bytes)= %s \n",n, resp);
 			   /* parse msg; if good, continue */ 
 				if ( (ret = parseMessage(&contents, resp)) < 0) 
-					on_error("invalid response to hello\n");
+					on_error("Invalid sever response to initial Hello\n");
 				
 				if (contents.type == RESP && contents.status == OK) {
 					step = 2;
@@ -325,13 +302,13 @@ int processSecCTP(serverDetails *secCTPserver) {
 				break;
 			case 2: /* Send DTLS hello message */				
 				if ((sd = dtls_connect(secCTPserver)) > 0) {
-					fprintf(stderr,"dtls connected \n");fflush(stderr);
+					debug_message("DTLS connected,sending Hello \n");
 					ret = sendDTLSmessage(msg, resp);
 						/* parse msg; if good, continue */ //FIXME HERE
 					if (ret > 0) 
-						fprintf(stderr,"response:\n%s \n",resp);fflush(stderr);
+						debug_message("Response:\n%s \n",resp);
 					if ( ret > 0 && (ret = parseMessage(&contents, resp)) < 0) 
-						on_error("invalid response\n");					
+						on_error("Invalid sever response to Hello\n");					
 					if (contents.type == RESP && contents.status == OK) 
 						step = 3;
 					else 
@@ -341,8 +318,7 @@ int processSecCTP(serverDetails *secCTPserver) {
 					ret = -3;
 				break;
 			case 3: /* complete authentication transaction */  		
-
-				creds = (char*)calloc(CRED_LENGTH,sizeof(char));
+				creds = (char*)calloc(MAX_CRED_LENGTH,sizeof(char));
 				if (creds != NULL && (ret = userIO(creds, secCTPserver->hostname)) < 0)
 					on_error("error on user i/o");
 					
@@ -356,7 +332,7 @@ int processSecCTP(serverDetails *secCTPserver) {
 				ret = generateReq(msg, GET, secCTPserver->resource, headers, NULL);
 				ret = sendDTLSmessage(msg, resp);
 				if ( ret > 0 && (ret = parseMessage(&contents, resp)) < 0) 
-						on_error("invalid response");					
+						on_error("Invalid SecCTP response");					
 				if (contents.type == RESP && contents.status == OK) 
 					step = 4;
 				else 
@@ -372,12 +348,12 @@ int processSecCTP(serverDetails *secCTPserver) {
 		}
 	}
 	/* clean up and close */ 	
-	fprintf(stderr,"before bye %d\n",ret);fflush(stderr);	
+	debug_message("Before bye %d\n",ret);
 	ret = gnutls_bye(session, GNUTLS_SHUT_WR); //0 is success
-	fprintf(stderr,"after bye %d\n",ret);fflush(stderr);	
+	debug_message("After bye %d\n",ret);
 	gnutls_deinit(session);
 	ret = reInitgnutls();
-	fprintf(stderr,"after deinit %d\n",ret);fflush(stderr);	
+	debug_message("After deinit/reinit gnutlas %d\n",ret);
 	if (msg) 
 		free (msg);     
 	close(sd);	
@@ -415,8 +391,7 @@ int dtls_connect(serverDetails *secCTPserver){
 	int ret;
 	int secCTPsd;	
 
-		/* Set the X.509 credentials to the current session */ 
-		
+		/* Set the X.509 credentials to the current session */ 		
 	ret = gnutls_credentials_set(session, GNUTLS_CRD_CERTIFICATE, xcred);
 	if (ret < 0)  return ret;
 	
@@ -432,7 +407,7 @@ int dtls_connect(serverDetails *secCTPserver){
 	gnutls_transport_set_int(session, secCTPsd);
         /* set the connection MTU */
 	gnutls_dtls_set_mtu(session, 1000);
-        /* gnutls_dtls_set_timeouts(session, 1000, 60000); */
+       
 		
 	do { 
 		ret = gnutls_handshake(session);
@@ -442,14 +417,14 @@ int dtls_connect(serverDetails *secCTPserver){
 	/* Note that DTLS may also receive GNUTLS_E_LARGE_PACKET */
 
 	if (ret < 0) {
-		fprintf(stderr, "*** Handshake failed\n");
+		on_error("*** Handshake failed\n");
 		gnutls_perror(ret);
 	} else {
 		/* For debugging */
 		char *desc;		
 		desc = gnutls_session_get_desc(session);		
 		gnutls_free(desc);
-		/* */		
+			
 		ret = secCTPsd;
 	}
 	return ret;
@@ -462,11 +437,11 @@ int sendDTLSmessage(char *msg, char *resp) {
 	if (ret >= 0)  //If successful, receive response
 		ret = gnutls_record_recv(session, resp, MAX_BUF);
 	
-	if (ret < 0 && gnutls_error_is_fatal(ret) == 0) 
-		fprintf(stderr, "*** Warning: %s\n", gnutls_strerror(ret));
-	else if (ret < 0) 
-		fprintf(stderr, "*** Error: %s\n", gnutls_strerror(ret));
-		
+	if (ret < 0 && gnutls_error_is_fatal(ret) == 0) {
+		debug_message("*** Warning: %s\n", gnutls_strerror(ret));
+	} else if (ret < 0) {
+		on_error("*** Error: %s\n", gnutls_strerror(ret));
+	}
 	return ret;
 }
 
