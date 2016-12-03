@@ -9,8 +9,10 @@
 #include <mqueue.h>
 #include <errno.h>
 
-#include "nic.h"
+//#define DEBUG
 
+#include "nic.h"
+#include "../cpp_debug.hpp"
 
 using std::cout;
 using std::cerr;
@@ -46,7 +48,7 @@ int main(int argc, char* argv[]) {
     std::string response = "";
     
     if (argc != 4) {
-        cout << "Usage: " << argv[0] << " <interface> <send mqueue name> <recv mqueue name>" << endl;
+        on_error("Usage: ", argv[0]," <interface> <send mqueue name> <recv mqueue name>");
         return EXIT_FAILURE;
     }
 
@@ -54,7 +56,7 @@ int main(int argc, char* argv[]) {
 		
         //Open the message queue for send/rec'd 
         if ( (mq_recv = mq_open(argv[2], O_RDONLY)) == (mqd_t) -1 || (mq_snd = mq_open(argv[3], O_WRONLY)) == (mqd_t) -1) {
-			cout << "queue does not exist " << errno << endl;
+			on_error("queue does not exist ", errno);
 			return EXIT_FAILURE;
 		}
 			
@@ -63,7 +65,7 @@ int main(int argc, char* argv[]) {
         config.set_filter("tcp port 8888");        
         Sniffer sniffer(argv[1], config);
 		
-        cout << "Starting capture on interface " << argv[1] << endl;
+        debug_message("Starting capture on interface ",argv[1]);
 		//Create and join the thread and main
 		if (pthread_create(&thread, NULL, monitor, (void *)&sniffer))
 			return EXIT_FAILURE;        	
@@ -82,16 +84,16 @@ int main(int argc, char* argv[]) {
 				IPv4Address check(addr);			
 			
 				(active.find(check) == active.end())? response =  NOT_FOUND: response = FOUND;					
-				cerr << "sending from active " << response.c_str() << endl;
+				debug_message("sending from active ", response.c_str());
 				if ( mq_send(mq_snd, response.c_str(), strlen(response.c_str()), 0) < 0) 
-					cerr << "error on send " << errno << endl;
+					on_error("error on send ", errno);
 				
 				
 			}			
 		}		
     }
     catch (exception& ex) {
-        cerr << "Error: " << ex.what() << endl;
+        on_error("Error: ", ex.what());
         return EXIT_FAILURE;
     }
 }

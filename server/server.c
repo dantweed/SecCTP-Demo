@@ -18,6 +18,8 @@
 #include <gnutls/dtls.h>
 #include <mqueue.h>
 
+//#define DEBUG
+
 #include "../secctp.h"
 #include "server.h"
 #include <signal.h>
@@ -34,6 +36,7 @@
 #define MAX_BUF 1024
 #define WEBPORT "8888"
 #define DONE -1
+
 
 typedef struct {
         gnutls_session_t session;
@@ -381,12 +384,13 @@ int processSecCTP(int sock) {
 								on_error("invalid message from client");
 							
 							debug_message("3rd dtls msg\n%s\n",buffer);
-							if (contents.type == REQ ) { //TODO: validation of credentials
-								//For now
-								authorized = 1;
+							if (contents.type == REQ ) { 
+								debug_message("Msg headers\n%s\n", contents.headers);								
+								authorized = authorization(contents.headers);
+								
 								if (!msg) 
 									msg = (char*)calloc(MAX_BUF, sizeof(char));
-								if ( (ret =  generateResp(msg, OK, NULL, NULL)) > 0 ) {
+								if ( (ret =  generateResp(msg, OK, NULL, NULL)) > 0 ) { //TODO: Update to different msg based on auth, max retries, etc
 									debug_message("dtls resp\n%s\n",msg);
 									if ( ( ret = gnutls_record_send(session, msg, strlen(msg)) ) > 0 ) 									
 										dtlsStep = 4;					
@@ -417,9 +421,9 @@ int processSecCTP(int sock) {
 								} else {
 									debug_message("signal sent\n");	
 								}
-							}							
-							dtlsStep = DONE;														
+							}																												
 						}
+						dtlsStep = DONE;
 						break;
 					default:
 						ret = -1; //error

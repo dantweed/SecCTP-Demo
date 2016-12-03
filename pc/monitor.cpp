@@ -16,6 +16,10 @@
 #include <netdb.h> 
 #include <errno.h>
 
+//#define DEBUG
+
+#include "../cpp_debug.hpp"
+
 using std::string;
 using std::cout;
 using std::cerr;
@@ -32,21 +36,16 @@ using Tins::TCPIP::Stream;
 using Tins::TCPIP::StreamFollower;
 using Tins::IPv4Address;
 
+#define AUTH_SIGNAL 303
 
-#define PROCESSING 102
 
 // Don't buffer more than 3kb of data in either request/response
 const size_t MAX_PAYLOAD = 3 * 1024;
 
-//Some regex to extract necessary data
- //Get the status code
-regex code_regex("HTTP/[^ ]+ ([\\d]+)");
- //Search for SecCTP URI (assume hostname is same as main server, extract from active stream)
-//regex request_regex("([\\w]+) ([^ ]+).+\r\nHost: ([\\d\\w\\.-]+)\r\n");
+//Some regex to extract necessary data 
+regex code_regex("HTTP/[^ ]+ ([\\d]+)"); 
 regex request_regex("([\\w]+) ([^ ]+).+Host: ([\\d\\w\\.-]+)");
 regex secctp_regex("([\\w]+) ([^ ]+).+SecCTP: ([\\d\\w\\.-]+)");
-
-
 
 int sockfd, portno, n;
 struct sockaddr_in serv_addr;
@@ -59,13 +58,13 @@ int signalNIC(string server_addr, string uri, string url);
 
 int main(int argc, char* argv[]) {
     if (argc != 4) {
-        cout << "Usage: " << argv[0] << " <interface> <nic hostname/IP> <nic port>" << endl;
+        on_error("Usage: ", argv[0], " <interface> <nic hostname/IP> <nic port>");
         return 1;
     } try {		
 		//A few extractions for the connection to the SecNIC	    
 		portno = atoi(argv[3]);		
 		if ( (server = gethostbyname(argv[2])) == NULL) {
-			cerr << "ERROR invalid server" << endl;
+			on_error("ERROR invalid server");
 			return 1;
 		}
 		bzero((char *) &serv_addr, sizeof(serv_addr));
@@ -79,7 +78,7 @@ int main(int argc, char* argv[]) {
         config.set_filter("tcp port 8888"); //Only intersted in http         
         Sniffer sniffer(argv[1], config);
 
-        cout << "Starting capture on interface " << argv[1] << endl;
+        debug_message("Starting capture on interface ",argv[1]);
 
         // Construct and set up stream follower
         StreamFollower follower;        
@@ -90,8 +89,8 @@ int main(int argc, char* argv[]) {
         });
     }
     catch (exception& ex) {
-        cerr << "Error: " << ex.what() << endl;
-        return 1;
+        on_error("Error: ", ex.what());
+        return EXIT_FAILURE;
     }
 }
 
@@ -102,25 +101,25 @@ int signalNIC(string server_addr, string host, string port) {
 	std::ostringstream oss; 
 	
 	if ( (sockfd = socket(AF_INET,SOCK_STREAM,0)) < 0) {
-			cerr << "ERROR opening socket" << endl;
-			return 1;
+			on_error("ERROR opening socket");
+			return EXIT_FAILURE;
 	}
 	
 	if (connect(sockfd,(struct sockaddr *) &serv_addr,sizeof(serv_addr)) < 0) {
-		cerr << "ERROR connecting to server " << errno << endl;
+		on_error("ERROR connecting to server: ", errno);
 		
 	} else {
 		/* Build msg, msg format to be hostname/resource-ipaddress:port (i.e. three tokens)*/	
 		//URI from headers will be hostname-address:port		
 		
 		oss << host << "-" << server_addr << ":" << port << "\n";
-		//msg = oss.str();  TODO: update client on nic to accept this message format
-		msg = "localhost/pages/secure.html-127.0.0.1:5557";
+		msg = oss.str();  
+		//msg = "localhost/pages/secure.html-127.0.0.1:5557";
 		
 		//Send msg
 		wc = write(sockfd, msg.data(), msg.length());			
-		cout << "msg " << msg << endl;
-		cout << "Success wc " << wc << endl;
+		debug_message("msg ", msg);
+		debug_message("Success wc= ",wc);
 	}	
 	close(sockfd);	
 	return wc;
@@ -141,25 +140,25 @@ void on_server_data(Stream& stream) {
 		
 	string clnt_data = string(client_payload.begin(), client_payload.end());
 	string svr_data = string(server_payload.begin(), server_payload.end());
-	cout << "client payload " << endl << clnt_data << endl;
-	cout << "server payload " << endl << svr_data << endl;
-	cout << "valid " << valid << endl;
+	debug_message("client payload ", endl, clnt_data);
+	debug_message("server payload ", endl, svr_data);
+	
 	
     if (valid) {   		
         string response_code = string(server_match[1].first, server_match[1].second);  	
 		string url = string(client_match[2].first, client_match[2].second);
 		string host = string(client_match[3].first, client_match[3].second);			
-		cout << "host "<< host << " url " << url << " resp = " << response_code << endl; 
+		debug_message("host = ",host," url= ",url, " resp = ",response_code);
 		
-		if (std::stoi(response_code) == 303) {	
-			cout << "in processing"  << endl;
+		if (std::stoi(response_code) == AUTH_SIGNAL) {
+			debug_message("Processing authorization");
 			 regex_search(server_payload.begin(), server_payload.end(),
                            server_match, secctp_regex);              
 			IPv4Address server_addr = stream.server_addr_v4();
-				cout << server_addr.to_string() << endl;			
+				debug_message(server_addr.to_string());
 			string port = string(server_match[3].first, server_match[3].second);
 			if (signalNIC(server_addr.to_string(), host, port) < 0)
-					cerr << "Error in signaling SecNIC for auth" << endl;			
+					on_error("Error in signaling SecNIC for auth");
 		}		
         
     }
@@ -178,8 +177,7 @@ void on_client_data(Stream& stream) {
 void on_new_connection(Stream& stream) {	    
     stream.server_data_callback(&on_server_data);	
     stream.client_data_callback(&on_client_data);
-    stream.auto_cleanup_payloads(false); //No need to buffer the data
-    
+    stream.auto_cleanup_payloads(true); //No need to buffer the data   
     
 }
 
