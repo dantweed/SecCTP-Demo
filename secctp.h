@@ -23,7 +23,7 @@
 #define LANG "Accept-Language: en-gb, en\r\n" //Only accept engligh for now
 
 /* Some macros */
-#define phrase(status_code) (((status_code) == OK) ? "Ok": \
+#define phrase(status_code) (((status_code) == SECOK) ? "Ok": \
 		((status_code) == OTHER) ? "See Other" : \
 		((status_code) == BAD) ? "Bad Request" : \
 		((status_code) == UNAUTH) ? "Unauthorized" : \
@@ -31,7 +31,7 @@
 		((status_code) == SERVER_ERR) ? "Internal Server Error" :\
 		((status_code) == NOT_IMPL) ? "Not Implemented" : "Invalid status code")
 
-#define check_code(status_code) (((status_code) == OK) || \
+#define check_code(status_code) (((status_code) == SECOK) || \
 		((status_code) == OTHER)  || \
 		((status_code) == BAD) || \
 		((status_code) == UNAUTH) || \
@@ -49,7 +49,7 @@
 
 /* Status Codes */ 
 
-#define OK 200
+#define SECOK 200 //Renamed to avoid conflict with ncurses.h def
 #define OTHER 303
 #define BAD 400
 #define UNAUTH 401
