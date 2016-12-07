@@ -219,7 +219,7 @@ int processSecCTP(int sock) {
 					on_error("Invalid hello: server\n");
 				
 				if (contents.type == HELLO ) { //Assume compatabilty for now
-					if ( (ret =  generateResp(msg, OK, NULL, NULL)) > 0 ) {		
+					if ( (ret =  generateResp(msg, SECOK, NULL, NULL)) > 0 ) {		
 						debug_message("server resp\n %s\n",msg);
 						if ( (ret = sendto(sock, msg, strlen(msg), 0, (struct sockaddr *) &cli_addr,cli_addr_size)) > 0)   {            
 							secCTPstep = 2;					
@@ -351,7 +351,7 @@ int processSecCTP(int sock) {
 			
 							if (contents.type == HELLO ) { //Assume compatabilty for now
 								if (!msg) msg = (char*)calloc(MAX_BUF, sizeof(char));
-								if ( (ret =  generateResp(msg, OK, NULL, NULL)) > 0 ) {
+								if ( (ret =  generateResp(msg, SECOK, NULL, NULL)) > 0 ) {
 									debug_message("dtls resp\n%s\n",msg);
 									if ( ( ret = gnutls_record_send(session, msg, strlen(msg)) ) > 0 ) 									
 										dtlsStep = 3;					
@@ -390,7 +390,7 @@ int processSecCTP(int sock) {
 								
 								if (!msg) 
 									msg = (char*)calloc(MAX_BUF, sizeof(char));
-								if ( (ret =  generateResp(msg, OK, NULL, NULL)) > 0 ) { //TODO: Update to different msg based on auth, max retries, etc
+								if ( (ret =  generateResp(msg, SECOK, NULL, NULL)) > 0 ) { //TODO: Update to different msg based on auth, max retries, etc
 									debug_message("dtls resp\n%s\n",msg);
 									if ( ( ret = gnutls_record_send(session, msg, strlen(msg)) ) > 0 ) 									
 										dtlsStep = 4;					
