@@ -4,8 +4,8 @@
 #define CLIENT_H_
 
 #ifdef DEBUG
-	#define debug_message(...) {fprintf(stderr, __VA_ARGS__); fflush(stderr);}
-	#define on_error(...) {debug_message(__VA_ARGS__); fflush(stderr); return EXIT_FAILURE;}
+	#define debug_message(...) { wprintw(debugwin, __VA_ARGS__);wrefresh(debugwin);}
+	#define on_error(...) {fprintf(stderr, __VA_ARGS__); fflush(stderr); return EXIT_FAILURE;}
 #else
 	#define debug_message(...){}
 	#define on_error(...) {fprintf(stderr, __VA_ARGS__); fflush(stderr);}

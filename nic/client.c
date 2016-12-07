@@ -20,14 +20,13 @@
 #include <errno.h>
 
 //#define DEBUG
-
+#include <ncurses.h>
 #include "../secctp.h" //Message definitions, etc 
 #include "nic.h"	//defines for ipc communication
 #include "client.h"
 
-//TODO: move to curses UI instead of stdin
-//#include <ncurses.h>
-//TODO: after moving to curses UI, update all error handling
+
+
 
 gnutls_session_t session;
 gnutls_certificate_credentials_t xcred;
@@ -50,6 +49,11 @@ mqd_t mq_snd;
 mqd_t mq_recv;
 static volatile int forever = 1;
 
+WINDOW *iowin;
+#ifdef DEBUG
+	WINDOW *debugwin;
+#endif	
+
 int main(int argc, char *argv[]) {
 	
 	int parentfd;
@@ -60,7 +64,9 @@ int main(int argc, char *argv[]) {
 	int portno = LISTENPORT;  
 	pid_t synergy;
 	char buf[MAX_BUF];
-
+	
+	int maxx, maxy,halfx,halfy;
+	
 	struct sockaddr_in serveraddr;
 	struct sockaddr_in clientaddr; 	
 	
@@ -74,7 +80,31 @@ int main(int argc, char *argv[]) {
     attr.mq_maxmsg = 2;
     attr.mq_msgsize = MAX_SIZE;
     attr.mq_curmsgs = 0;
-		
+	
+	 /*  Initialize ncurses  */
+	if ( (initscr()) == NULL ) {
+		on_error("Error initializing ncurses.\n");
+		exit(EXIT_FAILURE);
+    }
+    refresh();
+    noecho();
+	    /* calculate window sizes and locations */
+    getmaxyx(stdscr, maxy, maxx);
+    halfx = maxx >> 1;
+    halfy = maxy >> 1;
+#ifdef DEBUG
+
+    debugwin =  newwin(halfy,maxx, halfy,0);
+    wprintw(debugwin,"DEBUG MESSAGES");
+    wrefresh(debugwin);
+    scrollok(debugwin, TRUE);   
+
+
+#endif    
+	iowin = newwin(halfy, maxx, 0,0);
+	wprintw(iowin,"SecCTP 1.1/");
+	wrefresh(iowin);
+	
 	/* validate args before bothering with anything else */	
 	//Used for debug on local machine only 
 	if (argc != 2) {  		
@@ -156,6 +186,7 @@ int main(int argc, char *argv[]) {
 			
 			close(childfd);
 			childfd = -1;
+			
 			/* Return keyboard control to user PC 
 			if ( (synergy = fork()) == 0) { 
 				if ( (execl("synergys", "synergys", (char*) NULL)) < 0) 
@@ -174,11 +205,21 @@ int main(int argc, char *argv[]) {
 	mq_unlink(SENDQUEUE);
 	mq_unlink(RECVQUEUE);
 	close(parentfd);
-    dtls_deinit();
+        dtls_deinit();
+	
 	/*
 	if ( synergy && ( ret = kill(synergy, SIGTERM)) < 0 ) 
 		on_error("Error killing synergy"); */
-	return EXIT_SUCCESS;
+	
+	clear();
+#ifdef DEBUG		
+	delwin(debugwin);
+#endif
+    delwin(iowin);
+    endwin();
+    refresh();	
+    system("reset"); //Reset terminal 
+    return EXIT_SUCCESS;
 }
 
 /* Validates that this is an active session and validates server details */
@@ -233,26 +274,21 @@ int parseUserPCmsg(serverDetails *secCTPserver, char *buf){	//TODO: update messa
 	int count = 0;
 	char *pch = strtok(buf, "-");
 	
-/* msg format to be hostname-address:port (i.e. 3 tokens)*/	
-//
+/* msg format: hostname-address:port (i.e. 3 tokens)*/	
+
 	if (pch != NULL) {
 		secCTPserver->hostname = pch;
 		count++;		
-		pch = strtok(NULL, ":");		
-	//	if (pch != NULL) {			
-	//		secCTPserver->resource = pch;
-	//		count++;			
-	//		pch = strtok(NULL, ":");			
-			if (pch != NULL) {				
-				secCTPserver->addr = pch;
+		pch = strtok(NULL, ":");			
+		if (pch != NULL) {				
+			secCTPserver->addr = pch;
+			count++;					
+			pch = strtok(NULL, ":");
+			if (pch != NULL) {					
+				secCTPserver->port = atoi(pch);
 				count++;					
-				pch = strtok(NULL, ":");
-				if (pch != NULL) {					
-					secCTPserver->port = atoi(pch);
-					count++;					
-				}
 			}
-	//	}		
+		}
 	} 		
 	return count;
 }
@@ -291,14 +327,16 @@ int processSecCTP(serverDetails *secCTPserver) {
 				debug_message("Respone (%d bytes)= %s \n",n, resp);
 			   /* parse msg; if good, continue */ 
 				if ( (ret = parseMessage(&contents, resp)) < 0) 
-					on_error("Invalid sever response to initial Hello\n");
+					on_error("Invalid server response to initial Hello\n");
 				
-				if (contents.type == RESP && contents.status == OK) {
+				if (contents.type == RESP && contents.status == SECOK) {
 					step = 2;
 					close(sd);  
 				}
-				else 
+				else {
+					debug_message("Invalid server response type[%d] or status[%d] step %d\nExpected type[%d] and status[%d]",contents.type,contents.status,step, RESP,SECOK);
 					ret = -1;
+				}
 				break;
 			case 2: /* Send DTLS hello message */				
 				if ((sd = dtls_connect(secCTPserver)) > 0) {
@@ -309,16 +347,20 @@ int processSecCTP(serverDetails *secCTPserver) {
 						debug_message("Response:\n%s \n",resp);
 					if ( ret > 0 && (ret = parseMessage(&contents, resp)) < 0) 
 						on_error("Invalid sever response to Hello\n");					
-					if (contents.type == RESP && contents.status == OK) 
+					if (contents.type == RESP && contents.status == SECOK) 
 						step = 3;
 					else 
 						ret = -2;						
 				} 
-				else 
+				else {
+					debug_message("Invalid server response type or status %d\n",step);
 					ret = -3;
+				}
 				break;
 			case 3: /* complete authentication transaction */  		
 				creds = (char*)calloc(MAX_CRED_LENGTH,sizeof(char));
+				
+				//TODO: allow multiple login attempts, needs changes to server as well
 				if (creds != NULL && (ret = userIO(creds, secCTPserver->hostname)) < 0)
 					on_error("error on user i/o");
 					
@@ -333,10 +375,12 @@ int processSecCTP(serverDetails *secCTPserver) {
 				ret = sendDTLSmessage(msg, resp);
 				if ( ret > 0 && (ret = parseMessage(&contents, resp)) < 0) 
 						on_error("Invalid SecCTP response");					
-				if (contents.type == RESP && contents.status == OK) 
+				if (contents.type == RESP && contents.status == SECOK) 
 					step = 4;
-				else 
+				else {
+					debug_message("Invalid server response type or status %d\n",step);
 					ret = -4;
+				}
 				if(creds) free(creds);
 				if(headers) free(headers);				
 				break;
@@ -353,7 +397,7 @@ int processSecCTP(serverDetails *secCTPserver) {
 	debug_message("After bye %d\n",ret);
 	gnutls_deinit(session);
 	ret = reInitgnutls();
-	debug_message("After deinit/reinit gnutlas %d\n",ret);
+	debug_message("After deinit/reinit gnutls %d\n",ret);
 	if (msg) 
 		free (msg);     
 	close(sd);	
@@ -368,22 +412,29 @@ int userIO (char *resp, char *hostname){  //userIO (char *resp, char *hostname, 
 	
 	uname[0] = '\0';
 	pwd[0] = '\0';
-	
-	/* to be changed to use curses at some point later */
+	debug_message("Processing user I/O");
+	echo();
 	while(strlen(uname) == 0) {
-		printf("[%s] Enter username: ", hostname);
-		fgets(uname,UNAME_LENGTH,stdin);
-		uname[strcspn(uname,"\r\n")] = '\0';		
+		wclear(iowin);
+		mvwprintw(iowin, 1,1,"[%s] Enter username: ", hostname);
+		wrefresh(iowin);
+		//fgets(uname,UNAME_LENGTH,stdin);
+		//uname[strcspn(uname,"\r\n")] = '\0';		
+		wgetnstr(iowin, uname, UNAME_LENGTH);
 	}
-	
+	noecho();
 	while(strlen(pwd) == 0) {
-		printf("[%s] Enter password: ", hostname);
-		fgets(pwd,PWD_LENGTH,stdin);
-		pwd[strcspn(pwd,"\r\n")] = '\0';
+		mvwprintw(iowin, 2,1,"[%s] Enter password: ", hostname);
+		wrefresh(iowin);
+		//fgets(pwd,PWD_LENGTH,stdin);
+		//pwd[strcspn(pwd,"\r\n")] = '\0';
+		wgetnstr(iowin, pwd, PWD_LENGTH);
 	}
-
+	wclear(iowin);
+	wprintw(iowin,"SecCTP 1.1/");	
+	wrefresh(iowin);
 	ret = sprintf(resp,"%s:%s\r\n",uname,pwd);		
-	
+	debug_message("Processing user I/O complete");
 	return ret;
 }
 
