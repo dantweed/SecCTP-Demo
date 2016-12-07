@@ -205,7 +205,7 @@ int main(int argc, char *argv[]) {
 	mq_unlink(SENDQUEUE);
 	mq_unlink(RECVQUEUE);
 	close(parentfd);
-    dtls_deinit();
+        dtls_deinit();
 	
 	/*
 	if ( synergy && ( ret = kill(synergy, SIGTERM)) < 0 ) 
@@ -219,7 +219,7 @@ int main(int argc, char *argv[]) {
     endwin();
     refresh();	
     system("reset"); //Reset terminal 
-	return EXIT_SUCCESS;
+    return EXIT_SUCCESS;
 }
 
 /* Validates that this is an active session and validates server details */
