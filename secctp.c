@@ -109,8 +109,7 @@ int generateResp(char *msg, int status_code, char *user_headers, char *body){
 int parseMessage(msgContents *contents, char *msg) {
 	int ret = -1;
 	char *tok;
-	char *infoline;
-	char *headers;
+	char *infoline;	
 	int count = 0; 	
 	
 	if (msg != NULL) { /* else msg is not a valid pointer */
@@ -122,15 +121,17 @@ int parseMessage(msgContents *contents, char *msg) {
 			/*extract headers */
 			tok = strtok(NULL, "\r\n");
 			if (tok != NULL) { /* else message is invalid */
-				headers = (char*) calloc(MAX_HEADER_SIZE, sizeof(char));
+				if (contents->headers != NULL)
+					contents->headers[0] = '\0';
+				else 
+					contents->headers = (char*) calloc(MAX_HEADER_SIZE, sizeof(char));
 					
 				while (tok != NULL && count <= MAX_HEADER_SIZE - 1) {
-					strncat(headers, tok, strlen(tok));
-					strncat(headers, "\r\n", 2);
+					strncat(contents->headers, tok, strlen(tok));
+					strncat(contents->headers, "\r\n", 2);
 					count += strlen(tok);
 					tok = strtok(NULL, "\r\n");
 				}
-				contents->headers = headers;
 				
 				/* extract body if exists, otherwise will set to NULL */
 				contents->body = strtok(NULL, "\r\n");

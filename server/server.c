@@ -194,7 +194,7 @@ int processSecCTP(int sock) {
 	
 	char buffer[MAX_BUF];
 	char *msg = NULL;
-	msgContents contents;
+	msgContents contents = {-1, NULL, NULL, NULL, NULL, -1, NULL};
 	
 	priv_data_st priv;        
 	gnutls_dtls_prestate_st prestate;
@@ -445,6 +445,8 @@ int processSecCTP(int sock) {
 		free(msg);
 		msg = NULL;
 	}
+	if (contents.headers)
+		free(contents.headers);
 	
 	if (dtlsStep == DONE && !authorized) //Failed at any step
 		mq_send(mq_snd, NOT_AUTH, MAX_SIZE, 0);
