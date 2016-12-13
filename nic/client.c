@@ -240,7 +240,7 @@ int parseUserPCmsg(serverDetails *secCTPserver, char *buf){	//TODO: update messa
 		count++;		
 		pch = strtok(NULL, ":");		
 	//	if (pch != NULL) {			
-	//		secCTPserver->resource = pch;
+			secCTPserver->resource = "/"; //TODO: parse URI from pc req
 	//		count++;			
 	//		pch = strtok(NULL, ":");			
 			if (pch != NULL) {				
@@ -261,16 +261,17 @@ int parseUserPCmsg(serverDetails *secCTPserver, char *buf){	//TODO: update messa
 
 int processSecCTP(serverDetails *secCTPserver) { 
 	char resp[MAX_BUF];
-	char *msg;	
+	char *msg = NULL;	
 	int ret = 0;
 	int sd,n;
 	int step = 1;
-	char *headers, *creds;
+	char *headers = NULL;
+	char *creds = NULL;
 	
 	struct sockaddr_in svraddr; 	
 	socklen_t svrlen = sizeof(svraddr);	
 		
-    msgContents contents;
+    msgContents contents = {-1, NULL, NULL, NULL, NULL, -1, NULL};
     
     while (step < 4 && step != DONE && ret >= 0) {
 		debug_message("processSecCTP while, step %d\nport = %d\n",step,secCTPserver->port);
@@ -355,7 +356,9 @@ int processSecCTP(serverDetails *secCTPserver) {
 	ret = reInitgnutls();
 	debug_message("After deinit/reinit gnutlas %d\n",ret);
 	if (msg) 
-		free (msg);     
+		free (msg); 
+	if (contents.headers)
+	    free(contents.headers); 
 	close(sd);	
    	return ret;
 }
