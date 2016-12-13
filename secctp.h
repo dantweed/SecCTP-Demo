@@ -17,7 +17,7 @@
 #define DEFAULT_CREDS "secctp:pass"
 #define AUTH_TAG "Authorization: Basic "
 
-#define MAX_HEADER_SIZE 8096 //8K is Apache max, others 16K (much larger than needed, optimize later)
+#define MAX_HEADER_SIZE 1024 //8K is Apache max, others 16K (much larger than needed, optimize later)
 
 #define DATE_FORMAT "Date: %a, %d %b %Y %H:%M:%S %Z\r\n"
 #define LANG "Accept-Language: en-gb, en\r\n" //Only accept engligh for now
