@@ -17,8 +17,8 @@ int generateMsg(char *msg, char *headers, char *body) {
 	if (msg && headers) {		
 		time_t now = time(0);
 		struct tm tm = *gmtime(&now);
-		char *time = malloc(strlen(DATE_FORMAT));
-   		strftime(time,MAX_HEADER_SIZE,DATE_FORMAT, &tm);		
+		char *time = (char *)calloc(strlen(DATE_FORMAT)+1, sizeof(char));
+   		strftime(time,strlen(DATE_FORMAT),DATE_FORMAT, &tm);
 		strcat(msg, time);
 		strcat(msg, headers);
 		strcat(msg, "\r\n"); //mandatory blank line
