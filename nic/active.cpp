@@ -9,8 +9,6 @@
 #include <mqueue.h>
 #include <errno.h>
 
-//#define DEBUG
-
 #include "nic.h"
 #include "../cpp_debug.hpp"
 

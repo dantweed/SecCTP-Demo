@@ -18,8 +18,6 @@
 #include <gnutls/dtls.h>
 #include <mqueue.h>
 
-//#define DEBUG
-
 #include "../secctp.h"
 #include "server.h"
 #include <signal.h>
