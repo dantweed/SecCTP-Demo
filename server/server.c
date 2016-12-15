@@ -58,8 +58,8 @@ static int generate_dh_params(void);
 static gnutls_certificate_credentials_t x509_cred;
 static gnutls_priority_t priority_cache;
 static gnutls_dh_params_t dh_params;
-gnutls_session_t session;
-gnutls_datum_t cookie_key;
+static gnutls_session_t session;
+static gnutls_datum_t cookie_key;
 
 static volatile int forever = 1;
 int secCTPstep = 1;
@@ -204,8 +204,12 @@ int processSecCTP(int sock) {
 	debug_message("before server while, fd %d CTPstep %d dtlsStep %d\n",sock,secCTPstep,dtlsStep)		
 	switch(secCTPstep) {
 		case 1: /* Expect unsecured hello message */ 	
-			if (!msg) msg = (char*)calloc(MAX_BUF, sizeof(char));
-			ret = recvfrom(sock, buffer, sizeof(buffer)-1, 0,
+			if (!msg)  {
+				msg = (char*)calloc(MAX_BUF+1, sizeof(char));
+				if (msg == NULL)
+					on_error("Memory allocation error");
+			}
+			ret = recvfrom(sock, buffer, MAX_BUF-1, 0,
 				   (struct sockaddr *) &cli_addr,
 				   &cli_addr_size);
 				   debug_message("recvd,\n%s\n",buffer)
@@ -248,11 +252,11 @@ int processSecCTP(int sock) {
 				switch(dtlsStep) {
 					case 1: /* DTLS Handshake */
 					debug_message("in handshake\n",buffer);
-						ret = recvfrom(sock, buffer, sizeof(buffer), MSG_PEEK,
+						ret = recvfrom(sock, buffer, MAX_BUF-1, MSG_PEEK,
 								(struct sockaddr *) &cli_addr,
 								&cli_addr_size);
 						if (ret > 0) {	
-							buffer[ret] = '\0';
+							//buffer[ret] = '\0';
 							debug_message("1st dtls msg\n%s\n",buffer);
 							/* dtls session and cookie setup */ 
 							memset(&prestate, 0, sizeof(prestate));
@@ -278,7 +282,7 @@ int processSecCTP(int sock) {
 														& s, push_func);
 
 								/* discard peeked data */
-								recvfrom(sock, buffer, sizeof(buffer), 0,
+								recvfrom(sock, buffer, MAX_BUF-1, 0,
 										 (struct sockaddr *) &cli_addr,
 										 &cli_addr_size);
 								usleep(100);
@@ -329,7 +333,7 @@ int processSecCTP(int sock) {
 						do {
 							ret =
 								gnutls_record_recv_seq(session, buffer,
-													   MAX_BUF,
+													   MAX_BUF-1,
 													   sequence);
 						} while (ret == GNUTLS_E_AGAIN || ret == GNUTLS_E_INTERRUPTED);
 
@@ -348,7 +352,11 @@ int processSecCTP(int sock) {
 								on_error("invalid message");
 			
 							if (contents.type == HELLO ) { //Assume compatabilty for now
-								if (!msg) msg = (char*)calloc(MAX_BUF, sizeof(char));
+								if (!msg)  {
+									msg = (char*)calloc(MAX_BUF+1, sizeof(char));
+									if (msg == NULL)
+										on_error("Memory allocation error");
+								} else msg[0] = '\0';
 								if ( (ret =  generateResp(msg, OK, NULL, NULL)) > 0 ) {
 									debug_message("dtls resp\n%s\n",msg);
 									if ( ( ret = gnutls_record_send(session, msg, strlen(msg)) ) > 0 ) 									
@@ -364,7 +372,7 @@ int processSecCTP(int sock) {
 						do {
 							ret =
 								gnutls_record_recv_seq(session, buffer,
-													   MAX_BUF,
+													   MAX_BUF-1,
 													   sequence);
 						} while (ret == GNUTLS_E_AGAIN || ret == GNUTLS_E_INTERRUPTED);
 
@@ -386,8 +394,11 @@ int processSecCTP(int sock) {
 								debug_message("Msg headers\n%s\n", contents.headers);								
 								authorized = authorization(contents.headers);
 								
-								if (!msg) 
-									msg = (char*)calloc(MAX_BUF, sizeof(char));
+								if (!msg)  {
+									msg = (char*)calloc(MAX_BUF+1, sizeof(char));
+									if (msg == NULL)
+										on_error("Memory allocation error");
+								} else msg[0] = '\0';
 								if ( (ret =  generateResp(msg, OK, NULL, NULL)) > 0 ) { //TODO: Update to different msg based on auth, max retries, etc
 									debug_message("dtls resp\n%s\n",msg);
 									if ( ( ret = gnutls_record_send(session, msg, strlen(msg)) ) > 0 ) 									
