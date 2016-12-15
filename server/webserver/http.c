@@ -21,7 +21,6 @@
 #include <signal.h>
 #include <errno.h>
 
-//#define DEBUG
 
 #define ERROR_PAGE "<html><head><title>Error</title></head><body>Error</body></html>"
 #define UNAUTH "<html><head><title>Unauthorized</title></head><body>Invalid credentials supplied</body></html>"
