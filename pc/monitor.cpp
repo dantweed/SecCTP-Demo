@@ -16,7 +16,6 @@
 #include <netdb.h> 
 #include <errno.h>
 
-//#define DEBUG
 
 #include "../cpp_debug.hpp"
 
