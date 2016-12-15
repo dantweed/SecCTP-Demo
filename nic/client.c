@@ -27,8 +27,8 @@
 //#include <ncurses.h>
 //TODO: after moving to curses UI, update all error handling
 
-gnutls_session_t session;
-gnutls_certificate_credentials_t xcred;
+static gnutls_session_t session;
+static gnutls_certificate_credentials_t xcred;
 
 int udp_connect(int port, const char *server);
 int initgnutls(void);
@@ -134,12 +134,12 @@ int main(int argc, char *argv[]) {
 				on_error("Error killing synergy");
 			synergy = 0; */	
 			
-			if ((n = read(childfd, buf, MAX_BUF)) < 0) 
+			if ((n = read(childfd, buf, MAX_BUF-1)) < 0) 
 				on_error("Error on read %d",errno);
 			buf[n] = '\0';
 			
 		/* Validate session, then server in request via DNS, call functions for SecCTP transaction */ 
-			if ( (ret = parseUserPCmsg(&secCTPserver,buf) != MSG_TOKENS)) 
+			if ( (ret = parseUserPCmsg(&secCTPserver, buf) != MSG_TOKENS)) 
 				on_error("Invalid message from User PC\n");
 			if ((ret = validateServer(&secCTPserver) != 0)) 
 				on_error("Invalid server or request\n");
@@ -154,6 +154,7 @@ int main(int argc, char *argv[]) {
 			
 			close(childfd);
 			childfd = -1;
+			
 			/* Return keyboard control to user PC 
 			if ( (synergy = fork()) == 0) { 
 				if ( (execl("synergys", "synergys", (char*) NULL)) < 0) 
@@ -251,7 +252,7 @@ int parseUserPCmsg(serverDetails *secCTPserver, char *buf){	//TODO: update messa
 				}
 			}
 	//	}		
-	} 		
+	} 			
 	return count;
 }
 
@@ -275,7 +276,9 @@ int processSecCTP(serverDetails *secCTPserver) {
 		debug_message("processSecCTP while, step %d\nport = %d\n",step,secCTPserver->port);
 		switch(step) {
 			case 1:	/* Send unsecure hello message */
-				msg = (char*)malloc(MAX_BUF);
+				msg = (char*)calloc(MAX_BUF+1, sizeof(char));
+				if (msg == NULL)
+					on_error("Memory allocation error\n");					
 				if ((ret = generateHello(msg, INFO, NULL, NULL)) < 0)
 					on_error("Error generating Hello");
 				if ((sd = udp_connect(secCTPserver->port, secCTPserver->addr)) < 0)
@@ -299,11 +302,12 @@ int processSecCTP(serverDetails *secCTPserver) {
 				else 
 					ret = -1;
 				break;
-			case 2: /* Send DTLS hello message */				
+			case 2: /* Send DTLS hello message */		
+				debug_message("DTLS connecting \n");
 				if ((sd = dtls_connect(secCTPserver)) > 0) {
 					debug_message("DTLS connected,sending Hello \n");
 					ret = sendDTLSmessage(msg, resp);
-						/* parse msg; if good, continue */ //FIXME HERE
+						/* parse msg; if good, continue */ 
 					if (ret > 0) 
 						debug_message("Response:\n%s \n",resp);
 					if ( ret > 0 && (ret = parseMessage(&contents, resp)) < 0) 
@@ -317,17 +321,17 @@ int processSecCTP(serverDetails *secCTPserver) {
 					ret = -3;
 				break;
 			case 3: /* complete authentication transaction */  		
-				creds = (char*)calloc(MAX_CRED_LENGTH,sizeof(char));
+				creds = (char*)calloc(MAX_CRED_LENGTH+1,sizeof(char));
 				if (creds != NULL && (ret = userIO(creds, secCTPserver->hostname)) < 0)
 					on_error("error on user i/o");
 					
 				//After obtaining user credentials, format to header and transmit
-				headers = (char*)calloc(MAX_HEADER_SIZE, sizeof(char));
+				headers = (char*)calloc(MAX_HEADER_SIZE+1, sizeof(char));
 				if (headers == NULL)
 					on_error("memory allocation error");
 					
 				sprintf(headers, "Authorization: Basic %s", creds);//format =  Authorization: Basic username:password
-				
+				msg[0] = '\0';
 				ret = generateReq(msg, GET, secCTPserver->resource, headers, NULL);
 				ret = sendDTLSmessage(msg, resp);
 				if ( ret > 0 && (ret = parseMessage(&contents, resp)) < 0) 
@@ -391,7 +395,7 @@ int userIO (char *resp, char *hostname){  //userIO (char *resp, char *hostname, 
 int dtls_connect(serverDetails *secCTPserver){
 	int ret;
 	int secCTPsd;	
-
+	debug_message("DTLS connect\n");
 		/* Set the X.509 credentials to the current session */ 		
 	ret = gnutls_credentials_set(session, GNUTLS_CRD_CERTIFICATE, xcred);
 	if (ret < 0)  return ret;
@@ -404,28 +408,32 @@ int dtls_connect(serverDetails *secCTPserver){
  	/* Perform the TLS handshake */
 	/* block until connected */
 	/* Set up upd connection and DTLS */
-	secCTPsd = udp_connect(secCTPserver->port, secCTPserver->addr);    
+	debug_message("DTLS UDP connect\n");
+	secCTPsd = udp_connect(secCTPserver->port, secCTPserver->addr);   
+	debug_message("DTLS UDP connected, sd=%d\n",secCTPsd); 
 	gnutls_transport_set_int(session, secCTPsd);
         /* set the connection MTU */
 	gnutls_dtls_set_mtu(session, 1000);
        
-		
+	
 	do { 
 		ret = gnutls_handshake(session);
+		debug_message("DTLS Handshake ret = %d\n", ret);
 	}
 	while (ret == GNUTLS_E_INTERRUPTED || ret == GNUTLS_E_AGAIN);
 	
 	/* Note that DTLS may also receive GNUTLS_E_LARGE_PACKET */
-
+	
 	if (ret < 0) {
 		on_error("*** Handshake failed\n");
 		gnutls_perror(ret);
 	} else {
+		debug_message("*** Handshake success \n");
 		/* For debugging */
 		char *desc;		
 		desc = gnutls_session_get_desc(session);		
-		gnutls_free(desc);
-			
+		debug_message("- Session info: %s\n", desc);
+		gnutls_free(desc);		
 		ret = secCTPsd;
 	}
 	return ret;
