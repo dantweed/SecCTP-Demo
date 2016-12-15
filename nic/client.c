@@ -19,7 +19,6 @@
 #include <signal.h>
 #include <errno.h>
 
-//#define DEBUG
 #include <ncurses.h>
 #include "../secctp.h" //Message definitions, etc 
 #include "nic.h"	//defines for ipc communication
