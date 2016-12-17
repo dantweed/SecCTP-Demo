@@ -170,6 +170,8 @@ int main(int argc, char *argv[]) {
 		/* Validate session, then server in request via DNS, call functions for SecCTP transaction */ 
 			if ( (ret = parseUserPCmsg(&secCTPserver,buf) != MSG_TOKENS)) 
 				on_error("Invalid message from User PC\n");
+			debug_message("User MSG valid, server= %s\n", secCTPserver.hostname);
+			
 			if ((ret = validateServer(&secCTPserver) != 0)) 
 				on_error("Invalid server or request\n");
 			
@@ -338,7 +340,8 @@ int processSecCTP(serverDetails *secCTPserver) {
 					ret = -1;
 				}
 				break;
-			case 2: /* Send DTLS hello message */				
+			case 2: /* Send DTLS hello message */
+			debug_message("Handshake with: %s\n", secCTPserver->hostname);				
 				if ((sd = dtls_connect(secCTPserver)) > 0) {
 					debug_message("DTLS connected, sending Hello \n");
 					ret = sendDTLSmessage(msg, resp);
@@ -452,7 +455,7 @@ int dtls_connect(serverDetails *secCTPserver){
 	if (ret < 0)  return ret;
     
 	gnutls_session_set_verify_cert(session, secCTPserver->hostname, 0);
- 	
+ 	debug_message("Handshake with: %s\n", secCTPserver->hostname);
  	/* Perform the TLS handshake */
 	/* block until connected */
 	/* Set up upd connection and DTLS */
@@ -468,7 +471,7 @@ int dtls_connect(serverDetails *secCTPserver){
 	while (ret == GNUTLS_E_INTERRUPTED || ret == GNUTLS_E_AGAIN);
 	
 	/* Note that DTLS may also receive GNUTLS_E_LARGE_PACKET */
-
+	debug_message("Handshake complete: %d\n", ret);
 	if (ret < 0) {
 		on_error("*** Handshake failed\n");
 		gnutls_perror(ret);
@@ -487,10 +490,11 @@ int sendDTLSmessage(char *msg, char *resp) {
 	int ret;	
     
 	ret =  gnutls_record_send(session, msg, strlen(msg));
-	debug_msg("DTLS message sent: %d\n", ret);
+	debug_message("DTLS message sent: %d\n", ret);
 	if (ret >= 0)  { //If successful, receive response
 		ret = gnutls_record_recv(session, resp, MAX_BUF);
-		debug_msg("DTLS response recv'd: %d\n", ret);
+		
+		debug_message("DTLS response recv'd: %d\n", ret);
 	}
 	
 	if (ret < 0 && gnutls_error_is_fatal(ret) == 0) {
