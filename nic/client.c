@@ -25,8 +25,6 @@
 #include "client.h"
 
 
-
-
 gnutls_session_t session;
 gnutls_certificate_credentials_t xcred;
 
@@ -236,6 +234,7 @@ int validateServer(serverDetails *secCTPserver) {
 	hints.ai_family = AF_INET; 
 	hints.ai_socktype = SOCK_STREAM;
 	
+	debug_message("Server hostname: %s\n",secCTPserver->hostname);
 	if ((ret = getaddrinfo(secCTPserver->hostname, NULL, &hints, &res)) != 0) 
 		on_error("Error getting addr info: %s\n", gai_strerror(ret));		
 	
@@ -341,7 +340,7 @@ int processSecCTP(serverDetails *secCTPserver) {
 				break;
 			case 2: /* Send DTLS hello message */				
 				if ((sd = dtls_connect(secCTPserver)) > 0) {
-					debug_message("DTLS connected,sending Hello \n");
+					debug_message("DTLS connected, sending Hello \n");
 					ret = sendDTLSmessage(msg, resp);
 						/* parse msg; if good, continue */ //FIXME HERE
 					if (ret > 0) 
@@ -478,7 +477,7 @@ int dtls_connect(serverDetails *secCTPserver){
 		char *desc;		
 		desc = gnutls_session_get_desc(session);		
 		gnutls_free(desc);
-			
+		debug_message("- Session info: %s\n", desc);
 		ret = secCTPsd;
 	}
 	return ret;
@@ -488,8 +487,11 @@ int sendDTLSmessage(char *msg, char *resp) {
 	int ret;	
     
 	ret =  gnutls_record_send(session, msg, strlen(msg));
-	if (ret >= 0)  //If successful, receive response
+	debug_msg("DTLS message sent: %d\n", ret);
+	if (ret >= 0)  { //If successful, receive response
 		ret = gnutls_record_recv(session, resp, MAX_BUF);
+		debug_msg("DTLS response recv'd: %d\n", ret);
+	}
 	
 	if (ret < 0 && gnutls_error_is_fatal(ret) == 0) {
 		debug_message("*** Warning: %s\n", gnutls_strerror(ret));

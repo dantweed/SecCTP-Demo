@@ -26,7 +26,7 @@
 #define UNAUTH "<html><head><title>Unauthorized</title></head><body>Invalid credentials supplied</body></html>"
 #define WORKING "<html><head><title>Processing</title></head><body>Processing request...</body></html>"
 
-#define HOSTNAME "localhost"
+#define HOSTNAME "secnic-pi"
 
 void sigTermHandler(int sig);
 void sigQueueHandler(int sig, siginfo_t *info, void *drop);
