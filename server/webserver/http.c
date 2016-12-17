@@ -26,7 +26,7 @@
 #define UNAUTH "<html><head><title>Unauthorized</title></head><body>Invalid credentials supplied</body></html>"
 #define WORKING "<html><head><title>Processing</title></head><body>Processing request...</body></html>"
 
-#define HOSTNAME "localhost"
+#define HOSTNAME "secnic-pi"
 
 void sigTermHandler(int sig);
 void sigQueueHandler(int sig, siginfo_t *info, void *drop);
@@ -149,7 +149,7 @@ static int generate_page (void *cls,
 	}
 	else if (!main && !suspend){	
 		suspend = 1;			
-		debug_message("queuing 102 resp\n");
+		debug_message("queuing 303 resp\n");
 		
 		char *location = (char*) calloc(MAX_SIZE, sizeof(char));
 		sprintf(location, "%s/%s", HOSTNAME, url);

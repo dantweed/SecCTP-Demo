@@ -114,12 +114,13 @@ void on_new_connection(Stream& stream) {
     //Only interested in the connections, not interested in the data
     stream.ignore_server_data();
     stream.ignore_client_data();    
-        
+    debug_message("Adding :  ", stream.server_addr_v4());    
     //Need to remove from list when connection is closed    
     stream.stream_closed_callback(&on_connection_closed);
 }
 
 void on_connection_closed(Stream& stream) {
     //Remove closed connect from list    
-	active.erase(active.find(stream.server_addr_v4()));		
+	active.erase(active.find(stream.server_addr_v4()));	
+	debug_message("Removing :  ", stream.server_addr_v4());    	
 }
