@@ -236,6 +236,7 @@ int validateServer(serverDetails *secCTPserver) {
 	hints.ai_family = AF_INET; 
 	hints.ai_socktype = SOCK_STREAM;
 	
+	debug_message("Server hostname: %s\n",secCTPserver->hostname);
 	if ((ret = getaddrinfo(secCTPserver->hostname, NULL, &hints, &res)) != 0) 
 		on_error("Error getting addr info: %s\n", gai_strerror(ret));		
 	
