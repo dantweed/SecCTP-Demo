@@ -5,7 +5,7 @@
 
 #ifdef DEBUG
 	#define debug_message(...) { wprintw(debugwin, __VA_ARGS__);wrefresh(debugwin);}
-	#define on_error(...) {fprintf(stderr, __VA_ARGS__); fflush(stderr); return EXIT_FAILURE;}
+	#define on_error(...) {wprintw(debugwin, __VA_ARGS__);wrefresh(debugwin);}// return EXIT_FAILURE;}
 #else
 	#define debug_message(...){}
 	#define on_error(...) {fprintf(stderr, __VA_ARGS__); fflush(stderr);}
@@ -17,7 +17,7 @@
 #define MAX_BUF 1024
 #define SENDQUEUE "/nic_queue_send"
 #define RECVQUEUE "/nic_queue_recv"
-#define CAFILE "./certs/cert.pem"  //TODO:generate new certs for distributed example
+#define CAFILE "./certs/ca-cert.pem"  //TODO:generate new certs for distributed example
 #define MSG_TOKENS 3
 #define DONE -1
 

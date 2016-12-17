@@ -22,7 +22,7 @@
 #include "server.h"
 #include <signal.h>
 
-#define KEYFILE "./certs/service-key.pem"
+#define KEYFILE "./certs/server-key.pem"
 #define CERTFILE "./certs/cert.pem"
 #define CAFILE "./certs/ca-cert.pem"
 
@@ -247,12 +247,12 @@ int processSecCTP(int sock) {
 			while (dtlsStep <= 4 && dtlsStep != DONE && ret >= 0) {	
 				switch(dtlsStep) {
 					case 1: /* DTLS Handshake */
-					debug_message("in handshake\n",buffer);
+					debug_message("in handshake\n");
 						ret = recvfrom(sock, buffer, sizeof(buffer), MSG_PEEK,
 								(struct sockaddr *) &cli_addr,
 								&cli_addr_size);
 						if (ret > 0) {	
-							buffer[ret] = '\0';
+							//buffer[ret] = '\0';
 							debug_message("1st dtls msg\n%s\n",buffer);
 							/* dtls session and cookie setup */ 
 							memset(&prestate, 0, sizeof(prestate));
@@ -309,7 +309,7 @@ int processSecCTP(int sock) {
 						gnutls_transport_set_pull_function(session, pull_func);
 						gnutls_transport_set_pull_timeout_function(session,
 																   pull_timeout_func);
-
+						debug_message("Starting handshake %d\n",ret);
 						do {
 								ret = gnutls_handshake(session);
 						} while (ret == GNUTLS_E_INTERRUPTED|| ret == GNUTLS_E_AGAIN);
