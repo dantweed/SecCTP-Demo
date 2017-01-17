@@ -106,6 +106,7 @@ int main(int argc, char *argv[]) {
 	//Used for debug on local machine only 
 	if (argc != 2) {  		
 	    on_error("Usage is %s <external facing interface>\n",argv[0]);		
+	    return EXIT_SUCCESS;
 	} else {
 		/* Set up mqueue and launch active.cpp */ 
 		if ( (mq_snd = mq_open(SENDQUEUE, O_WRONLY| O_CREAT, 0644, &attr)) == (mqd_t) -1) 

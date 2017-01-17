@@ -1,9 +1,30 @@
 <!DOCTYPE html>
 <html>
+<head>
+<title>SecCTP Secure Payment</title>
+</head>
 <body>
 
-<h1>Secure Page</h1>
+<h1>Secure Payment Page</h1>
+<form name="pmtForm" action=""  onsubmit="return validateForm(this)" method="post">
+Enter Payment Amount:  $<input type="text"  name="pmtAmt" id="pmtAmt"  value="e.g. 10.00" onfocus="if(this.value  == 'e.g. 10.00') { this.value = ''; } " onblur="if(this.value == '') { this.value = 'e.g. 10.00'; } " /><br><br>
+<input type="submit" value="Submit">
+</form>
 
+
+<script type="text/javascript">
+function validateForm(scope){
+   var regex  = /^\d+(?:\.\d{0,2})$/;
+   if (regex.test(pmtAmt.value))  {
+	    return true;
+	}
+	else  {
+		alert("Enter a valid payment amount, including dollars and cents ");
+		pmtAmt.value="e.g. 10.00";
+        return false;
+	}
+ }  
+</script>
 </body>
 </html> 
 
