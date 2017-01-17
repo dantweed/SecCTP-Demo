@@ -1,6 +1,3 @@
-/* Feel free to use this example code in any way
-   you see fit (Public Domain) */
-
 #include <sys/types.h>
 #include <sys/select.h>
 #include <sys/socket.h>
@@ -23,8 +20,10 @@
 
 
 #define ERROR_PAGE "<html><head><title>Error</title></head><body>Error</body></html>"
-#define UNAUTH "<html><head><title>Unauthorized</title></head><body>Invalid credentials supplied</body></html>"
+#define UNAUTH "<html><head><title>Authorization Failure</title></head><body>Invalid credentials supplied</body></html>"
 #define WORKING "<html><head><title>Processing</title></head><body>Processing request...</body></html>"
+#define  PROCESSED "<html><head><title>Success</title></head><body>Payment submitted successfully</body></html>"
+
 
 #define HOSTNAME "secnic-pi"
 
@@ -121,7 +120,7 @@ static int generate_page (void *cls,
 					MHD_HTTP_BAD_REQUEST, error_response);
 
 	fd = -1;
-	if (0 != strcmp (url, "/"))     { 
+	if (0 != strcmp (url, "/") && NULL == strstr(&url[1], "favicon.ico"))     { 
 		if ( (NULL == strstr (&url[1], "..")) && ('/' != url[1]) ) {
 			fd = open (&url[1], O_RDONLY);
 			fd = 1;					
@@ -149,7 +148,7 @@ static int generate_page (void *cls,
 	}
 	else if (!main && !suspend){	
 		suspend = 1;			
-		debug_message("queuing 102 resp\n");
+		debug_message("queuing 303 resp\n");
 		
 		char *location = (char*) calloc(MAX_SIZE, sizeof(char));
 		sprintf(location, "%s/%s", HOSTNAME, url);
