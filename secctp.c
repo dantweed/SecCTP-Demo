@@ -20,6 +20,7 @@ int generateMsg(char *msg, char *headers, char *body) {
 		char *time = (char *)calloc(strlen(DATE_FORMAT)+1, sizeof(char));
    		strftime(time,strlen(DATE_FORMAT),DATE_FORMAT, &tm);
 		strcat(msg, time);
+		strcat(msg, "\r\n");
 		strcat(msg, headers);
 		strcat(msg, "\r\n"); //mandatory blank line
 		if (body)
@@ -126,11 +127,11 @@ int parseMessage(msgContents *contents, char *msg) {
 				else 
 					contents->headers = (char*) calloc(MAX_HEADER_SIZE, sizeof(char));
 					
-				while (tok != NULL && count <= MAX_HEADER_SIZE - 1) {
+				while (tok != NULL && count <= MAX_HEADER_SIZE - 1) {					
 					strncat(contents->headers, tok, strlen(tok));
 					strncat(contents->headers, "\r\n", 2);
 					count += strlen(tok);
-					tok = strtok(NULL, "\r\n");
+					tok = strtok(NULL, "\r\n");					
 				}
 				
 				/* extract body if exists, otherwise will set to NULL */
@@ -180,7 +181,7 @@ int authorization(char *headers) {
 	int ret = 0;
 	char creds[MAX_CRED_LENGTH];
 	
-	if (headers) { //TODO:  Change to authentication against list/dbase of credentials
+	if (headers) { //TODO:  Change to authentication against list/dbase/hash of credentials
 		if (sscanf(strstr(headers, AUTH_TAG)+strlen(AUTH_TAG) ,"%s\r\n%*s",creds) > 0
 				&& strlen(DEFAULT_CREDS) == strlen(creds) ) {
 			ret = (strncmp(DEFAULT_CREDS, creds, strlen(DEFAULT_CREDS)) == 0);				

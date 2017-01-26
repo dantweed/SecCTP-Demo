@@ -2,7 +2,7 @@
 #define CPP_DEBUG_HPP
 
 #ifdef DEBUG
-	#define debug_message(...) cerr, __VA_ARGS__, endl
+	#define debug_message(...) cerr, __VA_ARGS__, endl;
 	#define on_error(...) {debug_message(__VA_ARGS__); exit(EXIT_FAILURE);}
 #else
 	#define debug_message(...){}

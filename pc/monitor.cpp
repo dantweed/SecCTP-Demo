@@ -53,7 +53,7 @@ struct hostent *server;
 void on_server_data(Stream& stream);
 void on_client_data(Stream& stream);
 void on_new_connection(Stream& stream);
-int signalNIC(string server_addr, string uri, string url);
+int signalNIC(string server_addr, string host, string port);
 
 int main(int argc, char* argv[]) {
     if (argc != 4) {
@@ -113,7 +113,7 @@ int signalNIC(string server_addr, string host, string port) {
 		
 		oss << host << "-" << server_addr << ":" << port << "\n";
 		msg = oss.str();  
-		//msg = "localhost/pages/secure.html-127.0.0.1:5557";
+		
 		
 		//Send msg
 		wc = write(sockfd, msg.data(), msg.length());			
@@ -142,14 +142,13 @@ void on_server_data(Stream& stream) {
 	debug_message("client payload ", endl, clnt_data);
 	debug_message("server payload ", endl, svr_data);
 	
-	
-    if (valid) {   		
-        string response_code = string(server_match[1].first, server_match[1].second);  	
-		string url = string(client_match[2].first, client_match[2].second);
+	if (valid) {   		
+        string response_code = string(server_match[1].first, server_match[1].second);  			
 		string host = string(client_match[3].first, client_match[3].second);			
-		debug_message("host = ",host," url= ",url, " resp = ",response_code);
 		
-		if (std::stoi(response_code) == AUTH_SIGNAL) {
+				
+		if (std::stoi(response_code) == AUTH_SIGNAL) {		
+			
 			debug_message("Processing authorization");
 			 regex_search(server_payload.begin(), server_payload.end(),
                            server_match, secctp_regex);              

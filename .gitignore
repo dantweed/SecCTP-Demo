@@ -36,3 +36,7 @@
 *~
 *.txt
 *.geany
+
+#certs
+*.pem
+*.csr

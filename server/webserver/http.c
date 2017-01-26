@@ -1,10 +1,8 @@
-/* Feel free to use this example code in any way
-   you see fit (Public Domain) */
-
 #include <sys/types.h>
 #include <sys/select.h>
 #include <sys/socket.h>
 #include <string.h>
+#include <arpa/inet.h>
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -21,13 +19,23 @@
 #include <signal.h>
 #include <errno.h>
 
-
 #define ERROR_PAGE "<html><head><title>Error</title></head><body>Error</body></html>"
-#define UNAUTH "<html><head><title>Unauthorized</title></head><body>Invalid credentials supplied</body></html>"
+#define UNAUTH "<html><head><title>Authorization Failure</title></head><body>Invalid credentials supplied</body></html>"
 #define WORKING "<html><head><title>Processing</title></head><body>Processing request...</body></html>"
+#define  PROCESSED "<html><head><title>Success</title></head><body>Payment submitted successfully</body></html>"
 
-#define HOSTNAME "secnic-pi"
+#define POSTBUFFERSIZE  512
+#define GET 0
+#define POST 1
 
+
+struct connection_info_struct {
+  int connectiontype;
+  char *answerstring;
+  struct MHD_PostProcessor *postprocessor;
+};
+
+int processAuth(char * msg) ;
 void sigTermHandler(int sig);
 void sigQueueHandler(int sig, siginfo_t *info, void *drop);
 
@@ -37,28 +45,41 @@ static int generate_page (void *cls,
    const char *method,
    const char *version,
    const char *upload_data,
-   size_t *upload_data_size, void **ptr);
-   
+   size_t *upload_data_size, void **con_ref);
+
+static int iterate_post (void *coninfo_cls, 
+	enum MHD_ValueKind kind, const char *key,
+	const char *filename, const char *content_type,
+	const char *transfer_encoding, const char *data, uint64_t off,
+	size_t size);
+
+static void request_completed (void *cls, 
+	struct MHD_Connection *connection,
+	void **con_cls, enum MHD_RequestTerminationCode toe);
+
 static struct MHD_Response *error_response;
 static struct MHD_Response *working_response;
 static struct MHD_Response *forbidden_response;
+static struct MHD_Response *processed_response;
+
 static volatile int resume = 0;
 static volatile int forever = 1;
 static volatile int data = 0;
+
 mqd_t mq_rcv;
-mqd_t mq_snd; //For use later in server initiated transactions
+mqd_t mq_snd; 
 
-
+int server_pid; 
 static int suspend = 0;	
 
 int main (int argc, char **argv) {
 	struct MHD_Daemon *daemon;	
 	
-	if (argc != 4) {
-		printf("Usage: %s <webport> <send mqueue name> <recv mqueue name> \n",argv[0]);
+	if (argc != 5) {
+		printf("Usage: %s <webport> <send mqueue name> <recv mqueue name> <server pid> \n",argv[0]);
 		return EXIT_FAILURE;
 	} 
-			
+	server_pid = atoi(argv[4]);
 	if ( (mq_rcv = mq_open(argv[2], O_RDONLY)) == (mqd_t) -1 || (mq_snd = mq_open(argv[3], O_WRONLY)) == (mqd_t) -1) 
 		on_error("queue does not exist");
 		
@@ -84,11 +105,13 @@ int main (int argc, char **argv) {
 		MHD_create_response_from_buffer (strlen (WORKING),(void *) WORKING, MHD_RESPMEM_PERSISTENT);  
 	forbidden_response =
 		MHD_create_response_from_buffer (strlen (UNAUTH),(void *) UNAUTH, MHD_RESPMEM_PERSISTENT);  
+	processed_response =
+		MHD_create_response_from_buffer (strlen (PROCESSED),(void *) PROCESSED, MHD_RESPMEM_PERSISTENT);  
 	if (MHD_add_response_header(working_response, "SecCTP", DEFAULT_SECCTP_PORT) == MHD_NO) 
 				on_error("error adding header");
 	
 	daemon = MHD_start_daemon (MHD_USE_SELECT_INTERNALLY|MHD_USE_SUSPEND_RESUME|MHD_USE_DEBUG, webport, NULL, 
-					NULL, &generate_page, NULL,  MHD_OPTION_END);
+					NULL, &generate_page, NULL, MHD_OPTION_NOTIFY_COMPLETED, request_completed, NULL,  MHD_OPTION_END);
 
 	if (NULL == daemon)
 		on_error("Error starting daemon");	
@@ -99,29 +122,75 @@ int main (int argc, char **argv) {
 	return EXIT_SUCCESS	;
 }
 
+static void
+request_completed (void *cls, struct MHD_Connection *connection,
+                   void **con_cls, enum MHD_RequestTerminationCode toe)
+{
+  struct connection_info_struct *con_info = *con_cls;
+
+  if (NULL == con_info)
+    return;
+
+  if (con_info->connectiontype == POST)
+    {
+      MHD_destroy_post_processor (con_info->postprocessor);
+      if (con_info->answerstring)
+        free (con_info->answerstring);
+    }
+
+  free (con_info);
+  *con_cls = NULL;
+}
+
 static int generate_page (void *cls, 
    struct MHD_Connection *connection,
    const char *url,
    const char *method,
    const char *version,
    const char *upload_data,
-   size_t *upload_data_size, void **ptr) {
-	   
+   size_t *upload_data_size, void **con_ref) {	   
 	   
 	struct MHD_Response *response;
 	int ret;
 	int fd;
 	struct stat buf;
 	
-	int main = 0;		
-	
+	int main = 0;
+	int post = 0;		
+	post = (0 == strcmp (method, MHD_HTTP_METHOD_POST));
 	if ( (0 != strcmp (method, MHD_HTTP_METHOD_GET)) &&  
-		(0 != strcmp (method, MHD_HTTP_METHOD_HEAD)) ) 			
-			return MHD_queue_response (connection, 	
-					MHD_HTTP_BAD_REQUEST, error_response);
+			(0 != strcmp (method, MHD_HTTP_METHOD_HEAD)) && 
+				(0 != strcmp (method, MHD_HTTP_METHOD_POST)) 	)
+				return MHD_queue_response (connection, 	
+						MHD_HTTP_BAD_REQUEST, error_response);
+	if (NULL == *con_ref)    {
+      struct connection_info_struct *con_info;
+      con_info = malloc (sizeof (struct connection_info_struct));
+      if (NULL == con_info)
+        return MHD_NO;
+      con_info->answerstring = NULL; 
+      
+      if ( post  ){
+          con_info->postprocessor =
+            MHD_create_post_processor (connection, POSTBUFFERSIZE,
+                                       iterate_post, (void *) con_info);
+          if (NULL == con_info->postprocessor) {
+              free (con_info);
+              return MHD_NO;
+            }
 
+          con_info->connectiontype = POST;
+        }
+      else
+        con_info->connectiontype = GET;
+
+      *con_ref = (void *) con_info;
+
+      return MHD_YES;
+    }				
+	
 	fd = -1;
-	if (0 != strcmp (url, "/"))     { 
+	if (0 != strcmp (url, "/") && NULL == strstr(&url[1], "favicon.ico"))     { 
 		if ( (NULL == strstr (&url[1], "..")) && ('/' != url[1]) ) {
 			fd = open (&url[1], O_RDONLY);
 			fd = 1;					
@@ -138,6 +207,7 @@ static int generate_page (void *cls,
 		(void) close (fd);
 		fd = -1;
 	} 
+	debug_message("main = %d -- suspend = %d -- post = %d\n",main,suspend,post);
 	if (main && -1 == fd ) 
 		return MHD_queue_response 
 				(connection, 	MHD_HTTP_BAD_REQUEST, error_response);
@@ -147,41 +217,60 @@ static int generate_page (void *cls,
 		ret = MHD_queue_response (connection, MHD_HTTP_OK, response);
 		MHD_destroy_response (response);		
 	}
-	else if (!main && !suspend){	
+	else if (!main && !suspend && !post){	
 		suspend = 1;			
-		debug_message("queuing 102 resp\n");
-		
-		char *location = (char*) calloc(MAX_SIZE, sizeof(char));
-		sprintf(location, "%s/%s", HOSTNAME, url);
+
+		debug_message("Queuing 303 resp\n");
 		
 		if (MHD_add_response_header(working_response, "Location", url) == MHD_NO) 
-			on_error("error adding header");
-		if (MHD_queue_response (connection, MHD_HTTP_SEE_OTHER, working_response)== MHD_NO)
-			on_error("error queueing 303 with header");
+			on_error("Error adding header");
+		if ( ( ret = MHD_queue_response (connection, MHD_HTTP_SEE_OTHER, working_response) ) == MHD_NO)
+			on_error("Error queueing 303 with header");
 		debug_message("Re-direct for auth resp queued, waiting for auth\n");
 		close(fd);
 	}
+	else if (!main && post) {
+	
+      struct connection_info_struct *con_info = *con_ref;
+      if (*upload_data_size != 0)  {
+          MHD_post_process (con_info->postprocessor, upload_data,
+                            *upload_data_size);
+          *upload_data_size = 0; 
+          return MHD_YES;
+        }
+      else if (NULL != con_info->answerstring) {
+		struct sockaddr **  addr =	(struct sockaddr **)MHD_get_connection_info (connection, MHD_CONNECTION_INFO_CLIENT_ADDRESS);
+		char msg[MAX_SIZE+1];;
+		if ((*addr)->sa_family == AF_INET) {
+				struct sockaddr_in *sin = (struct sockaddr_in *) *addr;
+				snprintf(msg, MAX_SIZE, "%s:%s", inet_ntoa(sin->sin_addr),con_info->answerstring);
+		}
+        else {
+			on_error("Invalid client address \n");
+		}
+	
+		debug_message("Address = %s\n",msg)																					
+	    processAuth(msg);
+		if (  (MHD_queue_response (connection, MHD_HTTP_OK, processed_response) == MHD_NO) )  
+			on_error("Error in queue resp\n")
+		} else {			
+			if ( MHD_queue_response (connection, MHD_HTTP_FORBIDDEN, forbidden_response) == MHD_NO) 
+				on_error("Error in queue not auth resp\n")
+		}	
+	
+	}
 	else if (suspend && (NULL != (response = MHD_create_response_from_fd (buf.st_size, fd))) ) {
 		
-		struct stat buf;
-		char buffer[MAX_SIZE+1];	
-		int bytes_rcvd;	
-		
-		//Wait on server auth
-		if ( (bytes_rcvd = mq_receive(mq_rcv, buffer, MAX_SIZE, NULL) ) < 0) 
-			on_error("Queue error %d",errno);fflush(stderr);
-			
-		buffer[bytes_rcvd] = '\0';
-		debug_message("Queue msg: %s$ \n",buffer);
-		if (strncmp(buffer, AUTHORIZED, strlen(AUTHORIZED)) == 0 ) {
-			if ( MHD_queue_response (connection, MHD_HTTP_OK, response) == MHD_NO) 
+		if (processAuth(NULL)) {
+			if ( MHD_queue_response (connection, MHD_HTTP_OK, response) == MHD_NO) {
 				on_error("Error in queue auth resp\n");
+			}
+			else
+				MHD_destroy_response(response);
 		} else {			
 			if ( MHD_queue_response (connection, MHD_HTTP_FORBIDDEN, forbidden_response) == MHD_NO) 
 				on_error("Error in queue not resp\n")
-		}			
-		MHD_destroy_response(response);
-			
+		}						
 	}
 	else {
 		/* internal error */
@@ -189,9 +278,42 @@ static int generate_page (void *cls,
 		return MHD_queue_response (connection, 	MHD_HTTP_INTERNAL_SERVER_ERROR, error_response);
 		debug_message("Internal server error");
 	}	
-	
+	debug_message("returning ret = %d\n",ret);	
 	return ret;
 }
+
+int processAuth(char * msg) {
+	
+	char buffer[MAX_SIZE+1];	
+	int bytes_rcvd, ret;	
+	
+	if (NULL != msg) { //Server initiated authentication
+		ret = mq_send(mq_snd, msg, strlen(msg), 0);						
+							
+		debug_message("msg sent %d\n", ret);
+		if (ret < 0) {  
+			on_error("Error in send %d\n", errno); 
+		} else {
+			union sigval auth;
+			auth.sival_int = 1;	
+			
+			if ( (ret = sigqueue(server_pid, SIGUSR2, auth)) < 0) {
+				on_error("error in signal %d\n",errno);
+			} else {
+				debug_message("signal sent\n");	
+			}
+		}	
+		//return 1; 							
+	}
+	//Wait on client auth
+	if ( (bytes_rcvd = mq_receive(mq_rcv, buffer, MAX_SIZE, NULL) ) < 0) 
+		on_error("Queue error %d",errno);
+
+	buffer[bytes_rcvd] = '\0';
+	debug_message("Queue msg: %s$ \n",buffer);
+	return 	 (strncmp(buffer, AUTHORIZED, strlen(AUTHORIZED)) == 0 );
+}
+
 
 void sigTermHandler(int sig) {	
 	forever = 0;
@@ -201,3 +323,31 @@ void sigQueueHandler(int sig, siginfo_t *info, void *drop) {
 	suspend = 0;	
 }
 
+static int
+iterate_post (void *coninfo_cls, enum MHD_ValueKind kind, const char *key,
+              const char *filename, const char *content_type,
+              const char *transfer_encoding, const char *data, uint64_t off,
+              size_t size)
+{
+  struct connection_info_struct *con_info = coninfo_cls;
+
+  if (0 == strcmp (key, "pmtAmt"))
+    {
+      if ((size > 0) && (size <= 64))
+        {
+          char *answerstring;
+          answerstring = malloc (256);
+          if (!answerstring)
+            return MHD_NO;
+
+          snprintf (answerstring, 256,  data);
+          con_info->answerstring = answerstring;
+        }
+      else
+        con_info->answerstring = NULL;
+
+      return MHD_NO;
+    }
+
+  return MHD_YES;
+}

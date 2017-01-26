@@ -7,12 +7,17 @@
 	#define debug_message(...) { wprintw(debugwin, __VA_ARGS__);wrefresh(debugwin);}
 	#define on_error(...) {wprintw(debugwin, __VA_ARGS__);wrefresh(debugwin);}// return EXIT_FAILURE;}
 #else
-	#define debug_message(...){}
+	#define debug_message(...){fprintf(stderr, __VA_ARGS__);}
 	#define on_error(...) {fprintf(stderr, __VA_ARGS__); fflush(stderr);}
 #endif
 
 #define LISTENPORT 5555 	//For incoming notifications from User PC
 #define SECCTPPORT 5557  	//Assume defined standard port
+
+#ifndef NI_MAXHOST
+#define NI_MAXHOST 1025
+#endif
+
 
 #define MAX_BUF 1024
 #define SENDQUEUE "/nic_queue_send"

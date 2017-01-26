@@ -21,7 +21,7 @@
 
 #include <ncurses.h>
 #include "../secctp.h" //Message definitions, etc 
-#include "nic.h"	//defines for ipc communication
+#include "nic.h"	//defines for ipc 
 #include "client.h"
 
 
@@ -34,12 +34,12 @@ int reInitgnutls(void);
 int dtls_connect(serverDetails *secCTPserver);
 void dtls_deinit(void);
 int sendDTLSmessage(char *msg, char *resp);
-int processSecCTP(serverDetails *secCTPserver);
+int processSecCTP(serverDetails *secCTPserver, int init_step);
 int validateServer(serverDetails *secCTPserver);
 int parseUserPCmsg(serverDetails *secCTPserver, char *buf);
-int userIO (char *resp, char *hostname);
+int userIO (char *resp, char *hostname, char *details);
 void sigHandler(int sig);
-
+static int wait_for_connection(int udp_fd, int tcp_fd);
 extern int verify_certificate_callback(gnutls_session_t session);
 
 mqd_t mq_snd;
@@ -53,18 +53,20 @@ WINDOW *iowin;
 
 int main(int argc, char *argv[]) {
 	
-	int parentfd;
-	int childfd;
+	int tcp_fd, sec_fd, conn_fd, childfd;
+	
 	int optval;
 	socklen_t clientlen;
-	int n, ret;	
+	int n, ret, init_step;	
 	int portno = LISTENPORT;  
 	pid_t synergy;
 	char buf[MAX_BUF];
+	char *msg = NULL;
 	
 	int maxx, maxy,halfx,halfy;
 	
 	struct sockaddr_in serveraddr;
+	struct sockaddr_in sec_addr;
 	struct sockaddr_in clientaddr; 	
 	
 	struct sigaction act;
@@ -106,6 +108,7 @@ int main(int argc, char *argv[]) {
 	//Used for debug on local machine only 
 	if (argc != 2) {  		
 	    on_error("Usage is %s <external facing interface>\n",argv[0]);		
+	    return EXIT_SUCCESS;
 	} else {
 		/* Set up mqueue and launch active.cpp */ 
 		if ( (mq_snd = mq_open(SENDQUEUE, O_WRONLY| O_CREAT, 0644, &attr)) == (mqd_t) -1) 
@@ -114,7 +117,7 @@ int main(int argc, char *argv[]) {
 			on_error("Error opening queue %d", errno);	
 		if (fork() == 0) { /* If queues open, run monitor app in a separate process */	
 			if ( (execl("active.exe", "active.exe", argv[1], SENDQUEUE, RECVQUEUE, (char*) 0)) < 0) 
-				on_error("Error opening active monitor");
+				on_error("Error opening active link monitor");
 		}				
 	}	
 	
@@ -122,26 +125,51 @@ int main(int argc, char *argv[]) {
 	act.sa_handler = &sigHandler;
 	if ( ( sigaction(SIGINT, &act, NULL)) < 0)
 		on_error("Error handling signal %d", errno);
-	/* set up tcp server socket */
-	if ( (parentfd = socket(AF_INET, SOCK_STREAM, 0)) < 0) 
+		
+	/* Set up tcp server socket */
+	if ( (tcp_fd = socket(AF_INET, SOCK_STREAM, 0)) < 0) 
 		on_error("*** Error opening socket for tcp server %d", errno);	
 	optval = 1;
-	setsockopt(parentfd, SOL_SOCKET, SO_REUSEADDR|SO_REUSEPORT, (const void *)&optval , sizeof(int));
-
+	setsockopt(tcp_fd, SOL_SOCKET, SO_REUSEADDR|SO_REUSEPORT, (const void *)&optval , sizeof(int));
+		
 	bzero((char *) &serveraddr, sizeof(serveraddr)); 	
 	/* Bind to whatever our IP address is and selected port */
 	serveraddr.sin_family = AF_INET;  
 	serveraddr.sin_addr.s_addr = htonl(INADDR_ANY);  
 	serveraddr.sin_port = htons((unsigned short)portno);
-	if (bind(parentfd, (struct sockaddr *) &serveraddr, sizeof(serveraddr)) < 0) 
+	if (bind(tcp_fd, (struct sockaddr *) &serveraddr, sizeof(serveraddr)) < 0) 
+		on_error("ERROR on binding %d", errno);
+	if (listen(tcp_fd, 1) < 0)  /* only accept one connection at a time for now */ 
+		on_error("ERROR on listen %d", errno);
+	
+		
+	/* Set up udp client socket */
+	if ( (sec_fd = socket(AF_INET, SOCK_DGRAM, 0)) < 0) 
+		on_error("*** Error opening socket for udp client %d", errno);	
+
+   	bzero((char *) &sec_addr, sizeof(sec_addr)); 
+	sec_addr.sin_family = AF_INET;
+	sec_addr.sin_addr.s_addr = htonl(INADDR_ANY);
+	sec_addr.sin_port = htons(SECCTPPORT+1);
+	{ /* DTLS requires the IP don't fragment (DF) bit to be set */
+#if defined(IP_DONTFRAG)
+	optval = 1;
+	setsockopt(sec_fd, IPPROTO_IP, IP_DONTFRAG,
+			   (const void *) &optval, sizeof(optval));
+#elif defined(IP_MTU_DISCOVER)
+	optval = IP_PMTUDISC_DO;
+	setsockopt(sec_fd, IPPROTO_IP, IP_MTU_DISCOVER,
+			   (const void *) &optval, sizeof(optval));
+#endif
+	}		
+
+	if (bind(sec_fd, (struct sockaddr *) &sec_addr, sizeof(sec_addr)) < 0) 
 		on_error("ERROR on binding %d", errno);
 	
 	/* If everything else checks out, try initializing gnutls*/
 	if (initgnutls() < 0) 
 		on_error("*** Error initializing gnutls");	
-	
-	if (listen(parentfd, 1) < 0)  /* only accept one connection at a time for now */ 
-		on_error("ERROR on listen %d", errno);
+	   
     /*
     if ( (synergy = fork()) == 0) { // everything else checks out, start synergy for keyboard/mouse sharing	
 		if ( (execl("/usr/bin/synergys", "synergys", "--address", "localhost:24800",(char*) NULL)) < 0) 
@@ -152,39 +180,86 @@ int main(int argc, char *argv[]) {
 	clientlen = sizeof(clientaddr);	
 	while (forever) { /* Always be listening */ 	  //TODO: Expand to handle server initiated requests				
 		
-		debug_message("Waiting for msg from user PC\n", childfd);
-		if ( (childfd = accept(parentfd, (struct sockaddr *) &clientaddr, &clientlen)) < 0 && forever) 
-			on_error("ERROR on accept %d\n", errno);	
-		debug_message("Rec'd mesg from user PC %d\n", childfd);
-		if (forever && childfd > 0) { //Covers case of sig interupt out of accept block
-		/* On accept, kill synergy for now and get request details 
+
+		debug_message("Waiting for msg from user PC\n");
+		if ( (conn_fd = wait_for_connection(sec_fd, tcp_fd) ) < 0 && forever) 
+			on_error("ERROR on connection..\n");		
+		if (forever && conn_fd > 0) { //Covers case of sig interupt out of accept block
+			/* On accept, kill synergy for now and get request details 
 			fprintf(stderr,"killing syn\n");fflush(stderr);
 			if ( ( ret = kill(synergy, SIGTERM)) < 0 ) 
 				on_error("Error killing synergy");
-			synergy = 0; */	
+			synergy = 0; */				
 			
-			if ((n = read(childfd, buf, MAX_BUF)) < 0) 
-				on_error("Error on read %d",errno);
-			buf[n] = '\0';
-			
-		/* Validate session, then server in request via DNS, call functions for SecCTP transaction */ 
-			if ( (ret = parseUserPCmsg(&secCTPserver,buf) != MSG_TOKENS)) 
-				on_error("Invalid message from User PC\n");
-			debug_message("User MSG valid, server= %s\n", secCTPserver.hostname);
-			
-			if ((ret = validateServer(&secCTPserver) != 0)) 
-				on_error("Invalid server or request\n");
+			if (conn_fd == sec_fd) { /* Expecting unsecured Hello message */
+				msgContents contents = {-1, NULL, NULL, NULL, NULL, -1, NULL};
+				if (!msg) msg = (char*)calloc(MAX_BUF, sizeof(char));
+				ret = recvfrom(conn_fd, buf, sizeof(buf)-1, 0,
+					   (struct sockaddr *) &clientaddr,
+					   &clientlen);
+				debug_message("Received:\n%s\n",buf);
+					  
+				if (ret > 0) {
+					secCTPserver.hostname = NULL;
+					secCTPserver.addr = inet_ntoa(clientaddr.sin_addr);
+					if ((ret = validateServer(&secCTPserver) != 0)) 
+						on_error("Invalid server\n");					
+						   // check if valid hello
+						   /* parse msg; if good, continue */ 
+					debug_message("Valid server");
+					if ( (ret = parseMessage(&contents, buf)) < 0) 
+						on_error("Invalid hello\n");
+					debug_message("Valid message, sending response\n");
+					if (contents.type == HELLO ) { //Assume compatabilty for now
+						if ( (ret =  generateResp(msg, SECOK, NULL, NULL)) > 0 ) {		
+							debug_message("(%d)Valid--response(%d):\n %s\n",215,ret,msg);
+							if ( (ret = sendto(conn_fd, msg, strlen(msg), 0, (struct sockaddr *) &clientaddr,clientlen)) < 0) {
+								on_error("Error sending resp \n");
+							}
+						} else {
+							on_error("Error generating resp \n");
+						}
+					}
+					else {
+						on_error("Error in hello recv %d\n", contents.type);	
+						ret = -1;	
+					}			
+				}
+				if (msg) {
+					free(msg);
+					msg = NULL;
+				}
+				secCTPserver.port = SECCTPPORT;
+				init_step = 2;
+			}
+			else if (conn_fd ==  tcp_fd) {
+				debug_message("Rec'd mesg from user PC\n");						
+				if ( (childfd = accept(conn_fd, (struct sockaddr *) &clientaddr, &clientlen)) < 0) 
+					on_error("ERROR on accept %d\n", errno);						
+				if ((n = read(childfd, buf, MAX_BUF)) < 0) 
+					on_error("Error on read %d",errno);
+				buf[n] = '\0';
+				close(childfd);
+				childfd = -1;
+				if ( (ret = parseUserPCmsg(&secCTPserver,buf) != MSG_TOKENS)) 
+					on_error("Invalid message from User PC\n");
+				debug_message("User MSG valid, server= %s\nValidating server ...", secCTPserver.hostname);
+				if ((ret = validateServer(&secCTPserver) != 0)) 
+					on_error("Invalid server or request\n");
+				init_step = 1;
+			}
+			else {
+				on_error("Invalid connection\n");
+				forever = 0;				
+			}					
+									
 			
 			//Outcome of SecCTP transaction
 			debug_message("Begin secctp processing\n");
-			if (forever && (ret = processSecCTP(&secCTPserver)) < 0) {
-				on_error("after secctp %d\n",ret);
-				break; //error condition
-				
-			}
-			
-			close(childfd);
-			childfd = -1;
+			if (forever && (ret = processSecCTP(&secCTPserver,init_step)) < 0) {
+				on_error("ERROR in secctp %d\n",ret);
+				break; //error condition				
+			}					
 			
 			/* Return keyboard control to user PC 
 			if ( (synergy = fork()) == 0) { 
@@ -203,8 +278,9 @@ int main(int argc, char *argv[]) {
 	mq_close(mq_recv);
 	mq_unlink(SENDQUEUE);
 	mq_unlink(RECVQUEUE);
-	close(parentfd);
-        dtls_deinit();
+	close(tcp_fd);
+	close(sec_fd);
+    dtls_deinit();
 	
 	/*
 	if ( synergy && ( ret = kill(synergy, SIGTERM)) < 0 ) 
@@ -221,6 +297,34 @@ int main(int argc, char *argv[]) {
     return EXIT_SUCCESS;
 }
 
+static int wait_for_connection(int udp_fd, int tcp_fd) {
+	fd_set rd,wr;
+	int n, max_fd;
+	
+	max_fd = (udp_fd > tcp_fd) ? udp_fd: tcp_fd;
+			
+	FD_ZERO(&rd);    	     
+	FD_ZERO(&wr);    	     
+	FD_SET(udp_fd, &rd);
+	FD_SET(tcp_fd, &rd);	
+	
+	/* waiting part */
+	n = select(max_fd + 1, &rd, &wr, NULL, NULL);        
+
+	if (n < 0) {
+		debug_message("select() - %d", errno);
+		return -1;			
+	}	
+	
+	if (FD_ISSET(udp_fd,&rd))
+		return udp_fd;
+	if (FD_ISSET(tcp_fd,&rd))
+		return tcp_fd;
+	return -1;
+	
+}
+
+
 /* Validates that this is an active session and validates server details */
 int validateServer(serverDetails *secCTPserver) {
 	struct addrinfo *res= NULL, *p, hints;
@@ -233,25 +337,38 @@ int validateServer(serverDetails *secCTPserver) {
 	
 	/* check if hostname/IP pair is valid request */		
 	memset(&hints, 0, sizeof(hints));
-	hints.ai_family = AF_INET; 
-	hints.ai_socktype = SOCK_STREAM;
 	
-	debug_message("Server hostname: %s\n",secCTPserver->hostname);
-	if ((ret = getaddrinfo(secCTPserver->hostname, NULL, &hints, &res)) != 0) 
-		on_error("Error getting addr info: %s\n", gai_strerror(ret));		
-	
-	debug_message("Server address: %s\n",secCTPserver->addr);
-	for(p = res;p != NULL && result != 0 ; p = p->ai_next) {		
-		if (p->ai_family == AF_INET) { // IPv4			
-			struct sockaddr_in *ipv4 = (struct sockaddr_in *)p->ai_addr;
-			inet_ntop(AF_INET, &(ipv4->sin_addr), ipstrComp, INET_ADDRSTRLEN);			
-			result = strncmp(ipstrComp, secCTPserver->addr, INET_ADDRSTRLEN);			
-			debug_message("ipstrComp address: %s\n",ipstrComp);
-		} // else ignore IPv6 for now			
-	}
+	if (secCTPserver->hostname) { //If we have the host name, DNS lookup
+		debug_message("Server hostname: %s\n",secCTPserver->hostname);
+		hints.ai_family = AF_INET; 
+		hints.ai_socktype = SOCK_STREAM;
+		if ((ret = getaddrinfo(secCTPserver->hostname, NULL, &hints, &res)) != 0) 
+			on_error("Error getting addr info: %s\n", gai_strerror(ret));		
+		
+		debug_message("Server address: %s\n",secCTPserver->addr);
+		for(p = res;p != NULL && result != 0 ; p = p->ai_next) {		
+			if (p->ai_family == AF_INET) { // IPv4			
+				struct sockaddr_in *ipv4 = (struct sockaddr_in *)p->ai_addr;
+				inet_ntop(AF_INET, &(ipv4->sin_addr), ipstrComp, INET_ADDRSTRLEN);			
+				result = strncmp(ipstrComp, secCTPserver->addr, INET_ADDRSTRLEN);			
+				debug_message("ipstrComp address: %s\n",ipstrComp);
+			} // else ignore IPv6 for now			
+		}
 
-	freeaddrinfo(res); // free the linked list	
-	
+		freeaddrinfo(res); // free the linked list	
+	}
+	else {
+		secCTPserver->hostname = (char*)calloc(NI_MAXHOST, sizeof(char));
+		struct in_addr addr;  
+		struct hostent *hp;
+		if ( inet_aton(secCTPserver->addr, &addr)  &&
+			( hp = gethostbyaddr( (const void *)&addr, sizeof addr, AF_INET)) ) { 
+				strncpy(secCTPserver->hostname, hp->h_name, NI_MAXHOST-1);
+				result = 0;
+		}
+		else 
+			result = -1;		
+	}
 	if (result == 0) {
 		/* check if valid active connection */
 		strncpy(buffer, secCTPserver->addr, INET_ADDRSTRLEN);
@@ -278,30 +395,31 @@ int parseUserPCmsg(serverDetails *secCTPserver, char *buf){	//TODO: update messa
 
 	if (pch != NULL) {
 		secCTPserver->hostname = pch;
-		count++;		
-		pch = strtok(NULL, ":");			
-		if (pch != NULL) {				
-			secCTPserver->addr = pch;
-			count++;					
-			pch = strtok(NULL, ":");
-			if (pch != NULL) {					
-				secCTPserver->port = atoi(pch);
+		count++;	
+			
+			pch = strtok(NULL, ":");			
+			if (pch != NULL) {				
+				secCTPserver->addr = pch;
 				count++;					
+				pch = strtok(NULL, ":");
+				if (pch != NULL) {					
+					secCTPserver->port = atoi(pch);
+					count++;					
+				}
 			}
-		}
+		
 	} 
 	secCTPserver->resource = "/"; //TODO: parse URI from pc req		
 	return count;
 }
 
-/*will assume for now only a single trasnactions (i.e. is blocking) */
-
-int processSecCTP(serverDetails *secCTPserver) { 
+/*Assume only a single trasnactions (i.e. is blocking) */
+int processSecCTP(serverDetails *secCTPserver, int init_step) { 
 	char resp[MAX_BUF];
 	char *msg = NULL;	
 	int ret = 0;
 	int sd,n;
-	int step = 1;
+	int step = init_step;
 	char *headers = NULL;
 	char *creds = NULL;
 	
@@ -309,14 +427,17 @@ int processSecCTP(serverDetails *secCTPserver) {
 	socklen_t svrlen = sizeof(svraddr);	
 		
     msgContents contents = {-1, NULL, NULL, NULL, NULL, -1, NULL};
+    /* 1st message is always Hello */
     
+    msg = (char*)malloc(MAX_BUF);
+    if ((ret = generateHello(msg, INFO, NULL, NULL)) < 0)
+		on_error("Error generating Hello");
     while (step < 4 && step != DONE && ret >= 0) {
 		debug_message("processSecCTP while, step %d\nport = %d\n",step,secCTPserver->port);
 		switch(step) {
 			case 1:	/* Send unsecure hello message */
-				msg = (char*)malloc(MAX_BUF);
-				if ((ret = generateHello(msg, INFO, NULL, NULL)) < 0)
-					on_error("Error generating Hello");
+				
+				
 				if ((sd = udp_connect(secCTPserver->port, secCTPserver->addr)) < 0)
 					on_error("Connection error on initial Hello");	   
 				if ((n = send(sd, msg, strlen(msg), 0)) < 0)
@@ -327,31 +448,34 @@ int processSecCTP(serverDetails *secCTPserver) {
 				  	on_error("ERROR in recv initial Hello resp");
 				resp[n] = '\0';
 				debug_message("Respone (%d bytes)= %s \n",n, resp);
-			   /* parse msg; if good, continue */ 
+			   /* parse response; if good, continue */ 
 				if ( (ret = parseMessage(&contents, resp)) < 0) 
 					on_error("Invalid server response to initial Hello\n");
-				
+				debug_message("Msg headers\n%s\n", contents.headers);
 				if (contents.type == RESP && contents.status == SECOK) {
 					step = 2;
 					close(sd);  
 				}
 				else {
-					debug_message("Invalid server response type[%d] or status[%d] step %d\nExpected type[%d] and status[%d]",contents.type,contents.status,step, RESP,SECOK);
+					debug_message("Invalid server response type[%d] or status[%d] step %d\n",contents.type,contents.status,step);
 					ret = -1;
 				}
 				break;
 			case 2: /* Send DTLS hello message */
-			debug_message("Handshake with: %s\n", secCTPserver->hostname);				
+			debug_message("Handshake with: %s\n", secCTPserver->addr);				
 				if ((sd = dtls_connect(secCTPserver)) > 0) {
 					debug_message("DTLS connected, sending Hello \n");
 					ret = sendDTLSmessage(msg, resp);
-						/* parse msg; if good, continue */ //FIXME HERE
-					if (ret > 0) 
-						debug_message("Response:\n%s \n",resp);
+						/* parse msg; if good, continue */ 					
 					if ( ret > 0 && (ret = parseMessage(&contents, resp)) < 0) 
-						on_error("Invalid sever response to Hello\n");					
-					if (contents.type == RESP && contents.status == SECOK) 
+						on_error("Invalid sever response to Hello\n");		
+					debug_message("Msg headers\n%s\n", contents.headers);	
+					if (contents.type == RESP && (contents.status == UNAUTH || contents.status == SECOK)) {
 						step = 3;
+						if (contents.status == UNAUTH) {							
+							headers = contents.headers;								
+						}					
+					}
 					else 
 						ret = -2;						
 				} 
@@ -362,15 +486,27 @@ int processSecCTP(serverDetails *secCTPserver) {
 				break;
 			case 3: /* complete authentication transaction */  		
 				creds = (char*)calloc(MAX_CRED_LENGTH,sizeof(char));
+				double amount; 
+				char *details = NULL;
+				//Extract transaction details 
+				if (headers) {
+					
+					details = strtok(strstr(headers, TRANS_TAG)+strlen(TRANS_TAG),"\r\n");
+					if (details) {
+						debug_message("Headers (%d): \n%s\nAmount = %s\n",strlen(headers),headers,details);						
+					}
+					else
+						on_error("Invalid transaction details");
+				}
 				
 				//TODO: allow multiple login attempts, needs changes to server as well
-				if (creds != NULL && (ret = userIO(creds, secCTPserver->hostname)) < 0)
-					on_error("error on user i/o");
+				if (creds != NULL && (ret = userIO(creds, secCTPserver->hostname, details)) < 0)
+					on_error("Error in user i/o");
 					
 				//After obtaining user credentials, format to header and transmit
 				headers = (char*)calloc(MAX_HEADER_SIZE, sizeof(char));
 				if (headers == NULL)
-					on_error("memory allocation error");
+					on_error("Memory allocation error");
 					
 				sprintf(headers, "Authorization: Basic %s", creds);//format =  Authorization: Basic username:password
 				
@@ -378,6 +514,7 @@ int processSecCTP(serverDetails *secCTPserver) {
 				ret = sendDTLSmessage(msg, resp);
 				if ( ret > 0 && (ret = parseMessage(&contents, resp)) < 0) 
 						on_error("Invalid SecCTP response");					
+				debug_message("Msg headers\n%s\n", contents.headers);
 				if (contents.type == RESP && contents.status == SECOK) 
 					step = 4;
 				else {
@@ -409,19 +546,24 @@ int processSecCTP(serverDetails *secCTPserver) {
    	return ret;
 }
 
-/*Only handles authentication for now */
-int userIO (char *resp, char *hostname){  //userIO (char *resp, char *hostname, int transType)
+int userIO (char *resp, char *hostname, char *details){  
 	int ret = -1;
 	char uname[UNAME_LENGTH];
 	char pwd[PWD_LENGTH];
+	char msg[MAX_BUF];
 	
 	uname[0] = '\0';
 	pwd[0] = '\0';
-	debug_message("Processing user I/O");
+	debug_message("Processing user I/O\n");
+	if (NULL == details)
+		snprintf(msg, MAX_BUF, "LOGON->[%s]", hostname);
+	else
+		snprintf(msg, MAX_BUF, "Payment to [%s] $%s", hostname,details);
+
 	echo();
 	while(strlen(uname) == 0) {
 		wclear(iowin);
-		mvwprintw(iowin, 1,1,"[%s] Enter username: ", hostname);
+		mvwprintw(iowin, 1,1,"%s -- Enter username: ", msg);
 		wrefresh(iowin);
 		//fgets(uname,UNAME_LENGTH,stdin);
 		//uname[strcspn(uname,"\r\n")] = '\0';		
@@ -429,7 +571,7 @@ int userIO (char *resp, char *hostname){  //userIO (char *resp, char *hostname, 
 	}
 	noecho();
 	while(strlen(pwd) == 0) {
-		mvwprintw(iowin, 2,1,"[%s] Enter password: ", hostname);
+		mvwprintw(iowin, 2,1,"%s -- Enter password: ", msg);
 		wrefresh(iowin);
 		//fgets(pwd,PWD_LENGTH,stdin);
 		//pwd[strcspn(pwd,"\r\n")] = '\0';
@@ -439,7 +581,7 @@ int userIO (char *resp, char *hostname){  //userIO (char *resp, char *hostname, 
 	wprintw(iowin,"SecCTP 1.1/");	
 	wrefresh(iowin);
 	ret = sprintf(resp,"%s:%s\r\n",uname,pwd);		
-	debug_message("Processing user I/O complete");
+	debug_message("I/O complete\n");
 	return ret;
 }
 
@@ -492,9 +634,9 @@ int sendDTLSmessage(char *msg, char *resp) {
 	ret =  gnutls_record_send(session, msg, strlen(msg));
 	debug_message("DTLS message sent: %d\n", ret);
 	if (ret >= 0)  { //If successful, receive response
-		ret = gnutls_record_recv(session, resp, MAX_BUF);
-		
-		debug_message("DTLS response recv'd: %d\n", ret);
+		ret = gnutls_record_recv(session, resp, MAX_BUF);		
+		resp[ret] = '\0';
+		debug_message("DTLS response recv'd (%d): %s\n", ret, resp);		
 	}
 	
 	if (ret < 0 && gnutls_error_is_fatal(ret) == 0) {
@@ -502,6 +644,7 @@ int sendDTLSmessage(char *msg, char *resp) {
 	} else if (ret < 0) {
 		on_error("*** Error: %s\n", gnutls_strerror(ret));
 	}
+	
 	return ret;
 }
 

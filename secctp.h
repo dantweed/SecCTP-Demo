@@ -1,6 +1,6 @@
 #ifndef SECCTP_H
 #define SECCTP_H
-
+#include <arpa/inet.h>
 /* Some useful constants */
 
 #ifndef VERSION
@@ -16,6 +16,7 @@
 #define MAX_CRED_LENGTH (UNAME_LENGTH+PWD_LENGTH)
 #define DEFAULT_CREDS "secctp:pass"
 #define AUTH_TAG "Authorization: Basic "
+#define TRANS_TAG "Transaction: Payment "
 
 #define MAX_HEADER_SIZE 1024 //8K is Apache max, others 16K (much larger than needed, optimize later)
 
@@ -69,12 +70,18 @@ typedef struct msgContents{
 	char * resource;	
 } msgContents;
 
+typedef struct transaction {
+	struct in_addr client_addr;
+	double amount;
+} transaction;
+
 int generateHello(char *msg, char *method,char *headers, char *body);
 int generateReq(char *msg, char *method, char *uri,char *headers, char *body); 
 int generateResp(char *msg, int status_code,char *headers, char *body);
 
 int parseMessage(msgContents *contents, char *msg);
 int authorization(char *headers);
+
 
 #endif //#ifndef SECCTP_H
 
