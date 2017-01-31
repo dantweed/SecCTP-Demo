@@ -37,7 +37,7 @@ int sendDTLSmessage(char *msg, char *resp);
 int processSecCTP(serverDetails *secCTPserver, int init_step);
 int validateServer(serverDetails *secCTPserver);
 int parseUserPCmsg(serverDetails *secCTPserver, char *buf);
-int userIO (char *resp, char *hostname, char *details);
+int userIO (char *resp, char *hostname, char *details, int attempts);
 void sigHandler(int sig);
 static int wait_for_connection(int udp_fd, int tcp_fd);
 extern int verify_certificate_callback(gnutls_session_t session);
@@ -420,6 +420,7 @@ int processSecCTP(serverDetails *secCTPserver, int init_step) {
 	int ret = 0;
 	int sd,n;
 	int step = init_step;
+	int attempts = 0;
 	char *headers = NULL;
 	char *creds = NULL;
 	
@@ -488,9 +489,9 @@ int processSecCTP(serverDetails *secCTPserver, int init_step) {
 				creds = (char*)calloc(MAX_CRED_LENGTH,sizeof(char));
 				double amount; 
 				char *details = NULL;
+				int success = 0;
 				//Extract transaction details 
-				if (headers) {
-					
+				if (headers) {					
 					details = strtok(strstr(headers, TRANS_TAG)+strlen(TRANS_TAG),"\r\n");
 					if (details) {
 						debug_message("Headers (%d): \n%s\nAmount = %s\n",strlen(headers),headers,details);						
@@ -499,28 +500,37 @@ int processSecCTP(serverDetails *secCTPserver, int init_step) {
 						on_error("Invalid transaction details");
 				}
 				
-				//TODO: allow multiple login attempts, needs changes to server as well
-				if (creds != NULL && (ret = userIO(creds, secCTPserver->hostname, details)) < 0)
-					on_error("Error in user i/o");
+				do {
+					if (creds == NULL || (ret = userIO(creds, secCTPserver->hostname, details, attempts)) < 0)
+						on_error("Error in user i/o");
+						
+					//After obtaining user credentials, format to header and transmit
+					if (!headers)
+						headers = (char*)calloc(MAX_HEADER_SIZE, sizeof(char));
+					if (headers == NULL)
+						on_error("Memory allocation error");
+					headers[0] = '\0';	
+					sprintf(headers, "Authorization: Basic %s", creds);//format =  Authorization: Basic username:password
 					
-				//After obtaining user credentials, format to header and transmit
-				headers = (char*)calloc(MAX_HEADER_SIZE, sizeof(char));
-				if (headers == NULL)
-					on_error("Memory allocation error");
+					ret = generateReq(msg, GET, secCTPserver->resource, headers, NULL);
+					ret = sendDTLSmessage(msg, resp);
+					if ( ret > 0 && (ret = parseMessage(&contents, resp)) < 0) 
+							on_error("Invalid SecCTP response");					
+					debug_message("Msg headers\n%s\n", contents.headers);
 					
-				sprintf(headers, "Authorization: Basic %s", creds);//format =  Authorization: Basic username:password
-				
-				ret = generateReq(msg, GET, secCTPserver->resource, headers, NULL);
-				ret = sendDTLSmessage(msg, resp);
-				if ( ret > 0 && (ret = parseMessage(&contents, resp)) < 0) 
-						on_error("Invalid SecCTP response");					
-				debug_message("Msg headers\n%s\n", contents.headers);
-				if (contents.type == RESP && contents.status == SECOK) 
-					step = 4;
-				else {
-					debug_message("Invalid server response type or status %d\n",step);
-					ret = -4;
-				}
+					if (contents.type == RESP && contents.status == SECOK) {
+						step = 4;
+						success = 1;
+						break;
+					}
+					else if (contents.type == RESP && contents.status == UNAUTH) 
+						attempts++;
+					else {
+						debug_message("Invalid server response type or status %d\n",step);
+						ret = -4;
+					}
+					debug_message("Success = %d - ret = %d - step = %d\n", success, ret, step);
+				} while (~success && ret >= 0 );
 				if(creds) free(creds);
 				if(headers) free(headers);				
 				break;
@@ -540,13 +550,12 @@ int processSecCTP(serverDetails *secCTPserver, int init_step) {
 	debug_message("After deinit/reinit gnutls %d\n",ret);
 	if (msg) 
 		free (msg);  
-	if (contents.headers != NULL)
-	    free(contents.headers);    
+ 
 	close(sd);	
    	return ret;
 }
 
-int userIO (char *resp, char *hostname, char *details){  
+int userIO (char *resp, char *hostname, char *details, int attempts){  
 	int ret = -1;
 	char uname[UNAME_LENGTH];
 	char pwd[PWD_LENGTH];
@@ -555,14 +564,18 @@ int userIO (char *resp, char *hostname, char *details){
 	uname[0] = '\0';
 	pwd[0] = '\0';
 	debug_message("Processing user I/O\n");
+	if (attempts)
+		debug_message("Invalid credentials, retrying\n");
 	if (NULL == details)
 		snprintf(msg, MAX_BUF, "LOGON->[%s]", hostname);
 	else
 		snprintf(msg, MAX_BUF, "Payment to [%s] $%s", hostname,details);
 
 	echo();
+	wclear(iowin);
 	while(strlen(uname) == 0) {
-		wclear(iowin);
+		if (attempts) 
+			mvwprintw(iowin, 0,0,"Invalid credentials supplies.  RETRIES: %d", (AUTH_RETRIES - attempts));
 		mvwprintw(iowin, 1,1,"%s -- Enter username: ", msg);
 		wrefresh(iowin);
 		//fgets(uname,UNAME_LENGTH,stdin);

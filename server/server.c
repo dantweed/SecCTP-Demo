@@ -271,6 +271,7 @@ int processSecCTP(int sock) {
 	int mtu = 1400;
 	unsigned char sequence[8];	
 	int authorized = 0;
+	int attempts;
 	
 	
 	debug_message("before outer while, fd %d CTPstep %d dtlsStep %d\n",sock,secCTPstep,dtlsStep);		
@@ -446,44 +447,59 @@ int processSecCTP(int sock) {
 						debug_message("after step2 ret %d\n",ret);
 						break;
 					case 3: /* Authentication */ 
-						do {
-							ret =
-								gnutls_record_recv_seq(session, buffer,
-													   MAX_BUF,
-													   sequence);
-						} while (ret == GNUTLS_E_AGAIN || ret == GNUTLS_E_INTERRUPTED);
+						attempts = 1;
+						while (ret > 0 && !authorized ) {
+							if (attempts > AUTH_RETRIES)
+								break;
+							do {
+								ret =
+									gnutls_record_recv_seq(session, buffer,
+														   MAX_BUF,
+														   sequence);
+							} while (ret == GNUTLS_E_AGAIN || ret == GNUTLS_E_INTERRUPTED);
 
-						if (ret < 0 && gnutls_error_is_fatal(ret) == 0) {
-							fprintf(stderr, "*** Warning: %s\n",
-									gnutls_strerror(ret));								
-						} else if (ret < 0) {
-							fprintf(stderr, "Error in recv(%d): %s\n",ret,
-									gnutls_strerror(ret));								
-						}
-
-						if (ret > 0) {
-							buffer[ret] = 0;
-							if ( (ret = parseMessage(&contents, buffer)) < 0) 
-								on_error("invalid message from client");
-							
-							debug_message("3rd dtls msg\n%s\n",buffer);
-							if (contents.type == REQ ) { 
-								debug_message("Msg headers\n%s\n", contents.headers);								
-								authorized = authorization(contents.headers);
-								//TODO: Update to different msg based on auth, max retries, etc
-								if (!msg) 
-									msg = (char*)calloc(MAX_BUF, sizeof(char));
-								if ( (ret =  generateResp(msg, SECOK, NULL, NULL)) > 0 ) { 
-									debug_message("dtls resp\n%s\n",msg);
-									if ( ( ret = gnutls_record_send(session, msg, strlen(msg)) ) > 0 ) 									
-										dtlsStep = 4;					
-									else
-										dtlsStep = DONE;
-								}								
+							if (ret < 0 && gnutls_error_is_fatal(ret) == 0) {
+								fprintf(stderr, "*** Warning: %s\n",
+										gnutls_strerror(ret));								
+							} else if (ret < 0) {
+								fprintf(stderr, "Error in recv(%d): %s\n",ret,
+										gnutls_strerror(ret));								
 							}
-							else 
-								ret = -1;								
-						}	
+
+							if (ret > 0) {
+								
+								buffer[ret] = 0;
+								
+								if ( (ret = parseMessage(&contents, buffer)) < 0) 
+									on_error("invalid message from client");
+								
+								debug_message("3rd dtls msg\n%s\n",buffer);
+								if (contents.type == REQ ) { 
+									debug_message("Msg headers\n%s\n", contents.headers);								
+									authorized = authorization(contents.headers);
+									if (!msg) 
+										msg = (char*)calloc(MAX_BUF, sizeof(char));
+									if (authorized) 
+										ret = generateResp(msg, SECOK, NULL, NULL);
+									else {
+										attempts++;
+										ret =  generateResp(msg, UNAUTH, NULL, NULL);
+									}
+									
+									if ( ret > 0 ) { 
+										debug_message("dtls resp\n%s\n",msg);
+										if ( ( ret = gnutls_record_send(session, msg, strlen(msg)) ) > 0 ) 									
+											dtlsStep = 4;					
+										else
+											dtlsStep = DONE;
+									}								
+								}
+								else {
+									ret = -1;		
+								}
+														
+							}	
+						}
 						debug_message("End step3 ret %d\n",ret);
 						break;						
 					case 4: 

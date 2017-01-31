@@ -7,6 +7,7 @@
 #define NOT_AUTH "not auth"
 #define DEFAULT_SECCTP_PORT "5557"
 
+
 #ifdef DEBUG
 	#define debug_message(...) {fprintf(stderr, __VA_ARGS__); fflush(stderr);}
 	#define on_error(...) {debug_message(__VA_ARGS__); fflush(stderr); return EXIT_FAILURE;}

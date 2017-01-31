@@ -17,6 +17,7 @@
 #define DEFAULT_CREDS "secctp:pass"
 #define AUTH_TAG "Authorization: Basic "
 #define TRANS_TAG "Transaction: Payment "
+#define AUTH_RETRIES 3
 
 #define MAX_HEADER_SIZE 1024 //8K is Apache max, others 16K (much larger than needed, optimize later)
 
