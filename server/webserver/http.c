@@ -6,6 +6,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <time.h>
 #include <unistd.h>
 #include <sys/stat.h>
 #include <fcntl.h>
@@ -27,18 +28,20 @@
 #define POSTBUFFERSIZE  512
 #define GET 0
 #define POST 1
+#define COOKIE_NAME "Session"
 
 
 struct connection_info_struct {
   int connectiontype;
   char *answerstring;
   struct MHD_PostProcessor *postprocessor;
+  int existing;
 };
 
 int processAuth(char * msg) ;
 void sigTermHandler(int sig);
 void sigQueueHandler(int sig, siginfo_t *info, void *drop);
-
+int generateCookie(char *cookie, int size);
 static int generate_page (void *cls,
    struct MHD_Connection *connection,
    const char *url,
@@ -151,6 +154,7 @@ static int generate_page (void *cls,
    size_t *upload_data_size, void **con_ref) {	   
 	   
 	struct MHD_Response *response;
+	struct connection_info_struct *con_info;
 	int ret;
 	int fd;
 	struct stat buf;
@@ -164,12 +168,12 @@ static int generate_page (void *cls,
 				return MHD_queue_response (connection, 	
 						MHD_HTTP_BAD_REQUEST, error_response);
 	if (NULL == *con_ref)    {
-      struct connection_info_struct *con_info;
+      
       con_info = malloc (sizeof (struct connection_info_struct));
       if (NULL == con_info)
         return MHD_NO;
       con_info->answerstring = NULL; 
-      
+      con_info->existing = (NULL != MHD_lookup_connection_value (connection, MHD_COOKIE_KIND, COOKIE_NAME) );
       if ( post  ){
           con_info->postprocessor =
             MHD_create_post_processor (connection, POSTBUFFERSIZE,
@@ -217,7 +221,7 @@ static int generate_page (void *cls,
 		ret = MHD_queue_response (connection, MHD_HTTP_OK, response);
 		MHD_destroy_response (response);		
 	}
-	else if (!main && !suspend && !post){	
+	else if (!con_info->existing && !main && !suspend && !post){	
 		suspend = 1;			
 
 		debug_message("Queuing 303 resp\n");
@@ -259,9 +263,16 @@ static int generate_page (void *cls,
 		}	
 	
 	}
-	else if (suspend && (NULL != (response = MHD_create_response_from_fd (buf.st_size, fd))) ) {
-		
-		if (processAuth(NULL)) {
+	else if (con_info->existing || ( suspend && (NULL != (response = MHD_create_response_from_fd (buf.st_size, fd)))) ) {
+		int auth = 0; 
+		char * cookie = NULL;
+		if (con_info->existing || (auth  = processAuth(NULL)) ) {
+			if (auth) {
+				cookie = (char*)calloc(128, sizeof(char));				  
+				
+				if (cookie && generateCookie(cookie, 128) >= 0 && MHD_YES != MHD_set_connection_value (connection, MHD_HEADER_KIND, MHD_HTTP_HEADER_SET_COOKIE,cookie))
+					on_error("Error adding cookie\n");
+			}
 			if ( MHD_queue_response (connection, MHD_HTTP_OK, response) == MHD_NO) {
 				on_error("Error in queue auth resp\n");
 			}
@@ -269,8 +280,9 @@ static int generate_page (void *cls,
 				MHD_destroy_response(response);
 		} else {			
 			if ( MHD_queue_response (connection, MHD_HTTP_FORBIDDEN, forbidden_response) == MHD_NO) 
-				on_error("Error in queue not resp\n")
-		}						
+				on_error("Error in queue not auth resp\n")
+		}
+		if (cookie) free(cookie);						
 	}
 	else {
 		/* internal error */
@@ -281,6 +293,10 @@ static int generate_page (void *cls,
 	debug_message("returning ret = %d\n",ret);	
 	return ret;
 }
+
+
+
+
 
 int processAuth(char * msg) {
 	
@@ -350,4 +366,22 @@ iterate_post (void *coninfo_cls, enum MHD_ValueKind kind, const char *key,
     }
 
   return MHD_YES;
+}
+
+int generateCookie(char *cookie, int size) {
+	
+	char raw[65];
+	time_t t;
+	
+	char bases[3]= {'a','A','0'};
+	srand((unsigned)time(&t));
+	
+	for (int i=0;i<sizeof (raw);i++) {
+		char base = bases[rand()%3];
+		int mod = (base == 2)? 10: 26;
+		raw[i] = base + (rand () % mod); 
+	}
+	raw[64] = '\0';
+	return snprintf (cookie, size, "%s=%s", COOKIE_NAME, raw);
+
 }
