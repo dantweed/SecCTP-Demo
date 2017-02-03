@@ -6,10 +6,17 @@
 #include <time.h>
 #include <errno.h>
 
-/* Helper function for SecCTP messages
- * Builds standard message from status lines
- * Returns 0 on success, -1 indicates some fields invalid
- * (Reference SecCTP draft Sec. 7 )
+#define DELIM "\r\n" //Message line delimeter for convenience
+
+/** Generate correctly formatted SecCTP message
+ * 
+ * @param msg 		Pointer to buffer where the resulting message is stored
+ * 					which should contain applicable info-line
+ * @param headers	Composed message headers (must include default headers
+ * @param body		Optional message body
+ * 
+ * @return Length of formatted message or -1 in case of error
+ * Reference SecCTP draft Sec. 7 
 */
 int generateMsg(char *msg, char *headers, char *body) {
 	//All messages require the date header field
@@ -20,9 +27,9 @@ int generateMsg(char *msg, char *headers, char *body) {
 		char *time = (char *)calloc(strlen(DATE_FORMAT)+1, sizeof(char));
    		strftime(time,strlen(DATE_FORMAT),DATE_FORMAT, &tm);
 		strcat(msg, time);
-		strcat(msg, "\r\n");
+		strcat(msg,DELIM);
 		strcat(msg, headers);
-		strcat(msg, "\r\n"); //mandatory blank line
+		strcat(msg,DELIM); //mandatory blank line
 		if (body)
 			strcat(msg, body);
 		ret = strlen(msg);
@@ -32,10 +39,16 @@ int generateMsg(char *msg, char *headers, char *body) {
 }
 
 
-/* Generate SecCTP Hello message
- * Returns 0 on success, -1 indicates some fields invalid
- * Parameter msg contains formatted message
- * (Reference SecCTP draft Sec. 7.1 )
+/** Generate correctly formatted SecCTP Hello message
+ * 
+ * @param msg 			Pointer to buffer where the resulting message is stored
+ * @param method		Message method {INFO, GET, POST}
+ * @param user_headers	Optional user supplied message headers
+ * @param body			Optional message body
+ * 
+ * @return Length of formatted message or -1 in case of error
+ *
+ * Reference SecCTP draft Sec. 7.1 
 */
 int generateHello(char *msg, char *method, char *user_headers, char *body){
 	int ret = -1;
@@ -47,7 +60,8 @@ int generateHello(char *msg, char *method, char *user_headers, char *body){
 			strcat(headers,user_headers);  //Not robust against overflow
 		} 	
 		if (msg && method) {
-			sprintf(msg, "%s %s\r\n", method, VERSION);
+			sprintf(msg, "%s %s", method, VERSION);
+			strcat(msg,DELIM);
 			ret = generateMsg(msg, headers, body);
 		}
 		free(headers);
@@ -56,10 +70,17 @@ int generateHello(char *msg, char *method, char *user_headers, char *body){
 }
 
 
-/* Generate SecCTP Request message
- * Returns 0 on success, -1 indicates some fields invalid
- * Parameter msg contains formatted message
- * (Reference SecCTP draft Sec. 7.2 )
+/** Generate correctly formatted SecCTP Request message
+ * 
+ * @param msg 			Pointer to buffer where the resulting message is stored
+ * @param method		Message method {INFO, GET, POST}
+ * @param uri			Uniform resource identifier being requested
+ * @param user_headers	Optional user supplied message headers
+ * @param body			Optional message body
+ * 
+ * @return Length of formatted message or -1 in case of error
+ *
+ * Reference SecCTP draft Sec. 7.2 
 */
 int generateReq(char *msg, char *method, char *uri, char *user_headers, char *body){
 	int ret = -1;
@@ -71,7 +92,8 @@ int generateReq(char *msg, char *method, char *uri, char *user_headers, char *bo
 			strcat(headers,user_headers);  //Not robust against overflow
 		} 	
 		if (msg && method && uri && headers) {
-			sprintf(msg, "%s %s %s\r\n", method, uri, VERSION);
+			sprintf(msg, "%s %s %s", method, uri, VERSION);
+			strcat(msg,DELIM);
 			ret = generateMsg(msg, headers, body);
 		}
 		free(headers);
@@ -79,10 +101,16 @@ int generateReq(char *msg, char *method, char *uri, char *user_headers, char *bo
 	return ret;	
 }
 
-/* Generate SecCTP Response message
- * Returns 0 on success, -1 indicates some fields invalid
- * Parameter msg contains formatted message
- * (Reference SecCTP draft Sec. 7.3 )
+/** Generate correctly formatted SecCTP Response message
+ * 
+ * @param msg 			Pointer to buffer where the resulting message is stored
+ * @param status_code	Response code to applicable request
+ * @param user_headers	Optional user supplied message headers
+ * @param body			Optional message body
+ * 
+ * @return Length of formatted message or -1 in case of error
+ *
+ * Reference SecCTP draft Sec. 7.3 
 */
 int generateResp(char *msg, int status_code, char *user_headers, char *body){	
 	int ret = -1;
@@ -94,7 +122,8 @@ int generateResp(char *msg, int status_code, char *user_headers, char *body){
 			strcat(headers,user_headers);  //Not robust against overflow
 		} 			
 		if (check_code(status_code) && msg && headers) {
-			sprintf(msg, "%s %d\r\n", VERSION, status_code);
+			sprintf(msg, "%s %d", VERSION, status_code);
+			strcat(msg,DELIM);
 			ret = generateMsg(msg, headers, body);
 		}
 		free(headers);
@@ -102,10 +131,14 @@ int generateResp(char *msg, int status_code, char *user_headers, char *body){
 	return ret;	
 }
 
-/* Extract contents of SecCTP message
- * Returns 0 on success, -1 indicates some fields invalid
- * Parameter contents contains the results
- * (Reference SecCTP draft Sec. 7,7.1-3 )
+/** Helper function for parsing SecCTP messages
+ * 
+ * @param contents 	Pointer to struct where the message contents will be stored
+ * @param msg		SecCTP message to be processed
+ * 
+ * @return 0 for success, -1 in case of error or invalid message
+ *
+ * Reference SecCTP draft Sec. 7,1-3
 */
 int parseMessage(msgContents *contents, char *msg) {
 	int ret = -1;
@@ -115,12 +148,12 @@ int parseMessage(msgContents *contents, char *msg) {
 	
 	if (msg != NULL) { /* else msg is not a valid pointer */
 		/* extract info line */
-		tok = strtok(msg, "\r\n");
+		tok = strtok(msg, DELIM);
 		if (tok != NULL) { /* else message is empty*/
 			infoline = tok;
 			
 			/*extract headers */
-			tok = strtok(NULL, "\r\n");
+			tok = strtok(NULL, DELIM);
 			if (tok != NULL) { /* else message is invalid */
 				if (contents->headers != NULL)
 					contents->headers[0] = '\0';
@@ -129,13 +162,13 @@ int parseMessage(msgContents *contents, char *msg) {
 					
 				while (tok != NULL && count <= MAX_HEADER_SIZE - 1) {					
 					strncat(contents->headers, tok, strlen(tok));
-					strncat(contents->headers, "\r\n", 2);
+					strncat(contents->headers, DELIM, 2);
 					count += strlen(tok);
-					tok = strtok(NULL, "\r\n");					
+					tok = strtok(NULL, DELIM);					
 				}
 				
 				/* extract body if exists, otherwise will set to NULL */
-				contents->body = strtok(NULL, "\r\n");
+				contents->body = strtok(NULL, DELIM);
 			
 				/* parse info line */				
 				char *toks[3];			

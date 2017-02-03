@@ -178,7 +178,7 @@ int main(int argc, char *argv[]) {
     				
 	/* Main loop */
 	clientlen = sizeof(clientaddr);	
-	while (forever) { /* Always be listening */ 	  //TODO: Expand to handle server initiated requests				
+	while (forever) { /* Always be listening */ 					
 		
 
 		debug_message("Waiting for msg from user PC\n");
@@ -387,11 +387,9 @@ int validateServer(serverDetails *secCTPserver) {
 	
 }
 
-int parseUserPCmsg(serverDetails *secCTPserver, char *buf){	//TODO: update message format
+int parseUserPCmsg(serverDetails *secCTPserver, char *buf){
 	int count = 0;
 	char *pch = strtok(buf, "-");
-	
-/* msg format: hostname-address:port (i.e. 3 tokens)*/	
 
 	if (pch != NULL) {
 		secCTPserver->hostname = pch;
@@ -409,7 +407,7 @@ int parseUserPCmsg(serverDetails *secCTPserver, char *buf){	//TODO: update messa
 			}
 		
 	} 
-	secCTPserver->resource = "/"; //TODO: parse URI from pc req		
+	secCTPserver->resource = "/"; 
 	return count;
 }
 
@@ -417,12 +415,15 @@ int parseUserPCmsg(serverDetails *secCTPserver, char *buf){	//TODO: update messa
 int processSecCTP(serverDetails *secCTPserver, int init_step) { 
 	char resp[MAX_BUF];
 	char *msg = NULL;	
+	char *headers = NULL;
+	char *creds = NULL;
+	
 	int ret = 0;
 	int sd,n;
 	int step = init_step;
 	int attempts = 0;
-	char *headers = NULL;
-	char *creds = NULL;
+	
+	
 	
 	struct sockaddr_in svraddr; 	
 	socklen_t svrlen = sizeof(svraddr);	
@@ -489,7 +490,7 @@ int processSecCTP(serverDetails *secCTPserver, int init_step) {
 				creds = (char*)calloc(MAX_CRED_LENGTH,sizeof(char));
 				double amount; 
 				char *details = NULL;
-				int success = 0;
+				
 				//Extract transaction details 
 				if (headers) {					
 					details = strtok(strstr(headers, TRANS_TAG)+strlen(TRANS_TAG),"\r\n");
@@ -519,20 +520,23 @@ int processSecCTP(serverDetails *secCTPserver, int init_step) {
 					debug_message("Msg headers\n%s\n", contents.headers);
 					
 					if (contents.type == RESP && contents.status == SECOK) {
-						step = 4;
-						success = 1;
-						break;
+						step = 4;												
 					}
-					else if (contents.type == RESP && contents.status == UNAUTH) 
+					else if (contents.type == RESP && contents.status == FORBIDDEN) {
+						step = 4;						
+					}
+					else if (contents.type == RESP && contents.status == UNAUTH) {
 						attempts++;
+					}
 					else {
 						debug_message("Invalid server response type or status %d\n",step);
 						ret = -4;
 					}
-					debug_message("Success = %d - ret = %d - step = %d\n", success, ret, step);
-				} while (~success && ret >= 0 );
+					debug_message("ret = %d - step = %d\n",ret, step);
+				} while ( step == 3 && ret >= 0 );				
 				if(creds) free(creds);
-				if(headers) free(headers);				
+				if(headers) free(headers);			
+				debug_message("Done auth loop\n");	
 				break;
 			case 4: 
 			/* returning control to user PC */ 

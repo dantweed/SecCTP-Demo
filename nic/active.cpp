@@ -33,6 +33,10 @@ void on_new_connection(Stream& stream);
 void on_connection_closed(Stream& stream);
 void *monitor(void *args);
 
+#define WEBPORT 8888
+
+//List of active connection info ~ O(log n) insert/remove/find
+// Demo requirements don't require further efficiency
 multiset<Tins::IPv4Address> active;
 
 int main(int argc, char* argv[]) {
@@ -44,6 +48,9 @@ int main(int argc, char* argv[]) {
     char buffer[MAX_SIZE+1];
     ssize_t bytes_rcvd;
     std::string response = "";
+    
+    std::ostringstream oss; 
+	oss << "tcp port " << WEBPORT; //Only interested in HTTP
     
     if (argc != 4) {
         on_error("Usage: ", argv[0]," <interface> <send mqueue name> <recv mqueue name>");
@@ -69,14 +76,17 @@ int main(int argc, char* argv[]) {
 			return EXIT_FAILURE;        	
         //Inf loop until kill received from top level applicationi
         while (1) {
-			//block on reading mqueue, act on message rec'd
+			//Block on reading mqueue, act on message rec'd
+			// Either kill signal or request to check a connection request
 			bytes_rcvd = mq_receive(mq_recv, buffer, MAX_SIZE, NULL);			
 			buffer[bytes_rcvd] = '\0';			
 			if (0 == strncmp(buffer, MSG_DIE, strlen(MSG_DIE))) {					
+				//Try to close mqueue and terminate
 				if ( (mqd_t)-1 == mq_close(mq_snd) || (mqd_t)-1 == mq_close(mq_recv)) 
 					return EXIT_FAILURE;
 				return EXIT_SUCCESS;	
-			} else {				
+			} 
+			else {				
 				std::string addr(buffer);
 								
 				IPv4Address check(addr);			
@@ -96,6 +106,10 @@ int main(int argc, char* argv[]) {
     }
 }
 
+/** Monitor function to run in sniffer thread
+ * 
+ *  @param args	Pointer to the previously set up Sniffer
+ */
 void *monitor(void *args){
 	// construct the stream follower and run forever	
 	Sniffer *sniffer = (Sniffer*)args;
@@ -108,19 +122,30 @@ void *monitor(void *args){
 	return NULL;
 }
 
+/** Callback function for StreamFollower for new connections
+ * 
+ *  @param stream	The associated Stream
+ */
 void on_new_connection(Stream& stream) {
     //Add new connect to list
     active.insert(stream.server_addr_v4());         
     //Only interested in the connections, not interested in the data
     stream.ignore_server_data();
     stream.ignore_client_data();    
-    debug_message("Adding :  ", stream.server_addr_v4());        
+        
     //Need to remove from list when connection is closed    
     stream.stream_closed_callback(&on_connection_closed);
+    
+    debug_message("Adding :  ", stream.server_addr_v4());        
 }
 
+/** Callback function for StreamFollower for finalized connections
+ * 
+ *  @param stream	The associated Stream
+ */
 void on_connection_closed(Stream& stream) {
     //Remove closed connect from list    
 	active.erase(active.find(stream.server_addr_v4()));		
+	
 	debug_message("Removed :  ", stream.server_addr_v4());    
 }

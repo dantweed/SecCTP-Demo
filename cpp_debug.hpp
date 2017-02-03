@@ -8,6 +8,8 @@
 	#define debug_message(...){}
 	#define on_error(...) cerr, __VA_ARGS__, endl
 #endif
+
+//Operator translation for cleaner code
 template <typename T>
 std::ostream& operator,(std::ostream& out, const T& t) {
   out << t;

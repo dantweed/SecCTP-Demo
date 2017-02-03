@@ -169,7 +169,7 @@ int main(int argc, char **argv)
 			
 			if (forever && sock > 0 )  /* else error on attempted connect */			
 				processSecCTP(sock);	
-			if (secCTPstep == 1) {
+			//if (secCTPstep == 1) {
 				
 				listen_sd = socket(AF_INET, SOCK_DGRAM, 0);
 				setsockopt(listen_sd, IPPROTO_IP, IP_MTU_DISCOVER,
@@ -177,7 +177,7 @@ int main(int argc, char **argv)
 				setsockopt(listen_sd, SOL_SOCKET, SO_REUSEADDR, &(int){ 1 }, sizeof(int));
 				if ( bind(listen_sd, (struct sockaddr *) &sa_serv, sizeof(sa_serv)) < 0)
 					on_error("ERROR on binding server2 %d", errno);
-			}
+			//}
 		}
 		if (!forever)
 			close(listen_sd);
@@ -444,13 +444,13 @@ int processSecCTP(int sock) {
 								ret = -1;								
 						}
 						if (headers) free(headers);
+					
 						debug_message("after step2 ret %d\n",ret);
 						break;
 					case 3: /* Authentication */ 
-						attempts = 1;
-						while (ret > 0 && !authorized ) {
-							if (attempts > AUTH_RETRIES)
-								break;
+						attempts = 0;
+						while (ret > 0 && !authorized && attempts < AUTH_RETRIES) {
+							
 							do {
 								ret =
 									gnutls_record_recv_seq(session, buffer,
@@ -479,19 +479,20 @@ int processSecCTP(int sock) {
 									authorized = authorization(contents.headers);
 									if (!msg) 
 										msg = (char*)calloc(MAX_BUF, sizeof(char));
+									else 
+										msg[0] = '\0';
 									if (authorized) 
 										ret = generateResp(msg, SECOK, NULL, NULL);
 									else {
 										attempts++;
-										ret =  generateResp(msg, UNAUTH, NULL, NULL);
+										if (attempts < AUTH_RETRIES)								
+											ret =  generateResp(msg, UNAUTH, NULL, NULL);
+										else 
+											ret =  generateResp(msg, FORBIDDEN, NULL, NULL);
 									}
-									
-									if ( ret > 0 ) { 
-										debug_message("dtls resp\n%s\n",msg);
-										if ( ( ret = gnutls_record_send(session, msg, strlen(msg)) ) > 0 ) 									
-											dtlsStep = 4;					
-										else
-											dtlsStep = DONE;
+									debug_message("dtls resp on ret %d\n%s\n",ret, msg);
+									if ( ret > 0 ) { 										
+										ret = gnutls_record_send(session, msg, strlen(msg));											
 									}								
 								}
 								else {
@@ -499,7 +500,11 @@ int processSecCTP(int sock) {
 								}
 														
 							}	
-						}
+						}//Auth while
+						if (ret > 0 )
+							dtlsStep = 4;					
+						else
+							dtlsStep = DONE;
 						debug_message("End step3 ret %d\n",ret);
 						break;						
 					case 4: 
@@ -539,10 +544,15 @@ int processSecCTP(int sock) {
 		close(sock);		
 		gnutls_bye(session, GNUTLS_SHUT_WR);
 		gnutls_deinit(session);			
+		debug_message("Socket closed and dtls session deinit\n");
 	}
 	if (msg) {
 		free(msg);
 		msg = NULL;
+	}
+	if (trans) {
+		free(trans);
+		trans = NULL;
 	}
 	if (contents.headers)
 		free(contents.headers);
@@ -600,6 +610,7 @@ static int wait_for_connection(int fd)
         FD_SET(fd, &rd);
 
         /* waiting part */
+        debug_message("Waiting for connection...\n");
         n = select(fd + 1, &rd, &wr, NULL, NULL);                
         if (n == -1 && errno == EINTR) 
                 return -1;

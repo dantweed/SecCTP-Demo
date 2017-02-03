@@ -1,8 +1,8 @@
 #ifndef SECCTP_H
 #define SECCTP_H
 #include <arpa/inet.h>
-/* Some useful constants */
 
+/* Some useful constants */
 #ifndef VERSION
 	#define VERSION "SecCTP/1.0"
 #endif
@@ -19,7 +19,7 @@
 #define TRANS_TAG "Transaction: Payment "
 #define AUTH_RETRIES 3
 
-#define MAX_HEADER_SIZE 1024 //8K is Apache max, others 16K (much larger than needed, optimize later)
+#define MAX_HEADER_SIZE 1024 //Never reaches this max for SecCTP transactions
 
 #define DATE_FORMAT "Date: %a, %d %b %Y %H:%M:%S %Z\r\n"
 #define LANG "Accept-Language: en-gb, en\r\n" //Only accept engligh for now
@@ -37,6 +37,7 @@
 		((status_code) == OTHER)  || \
 		((status_code) == BAD) || \
 		((status_code) == UNAUTH) || \
+		((status_code) == FORBIDDEN) || \
 		((status_code) == TIMEOUT) || \
 		((status_code) == SERVER_ERR) || \
 		((status_code) == NOT_IMPL) ? 1 : 0 )
@@ -44,21 +45,22 @@
 #define eos(s) ((s)+strlen(s))
 
 /* Methods */
-
 #define INFO "INFO"
 #define GET "GET"
 #define POST "POST"
 
 /* Status Codes */ 
-
-#define SECOK 200 //Renamed to avoid conflict with ncurses.h def
+#define SECOK 200 //Renamed to avoid conflict with ncurses.h defined OK
 #define OTHER 303
 #define BAD 400
 #define UNAUTH 401
+#define FORBIDDEN 403
 #define TIMEOUT 408
 #define SERVER_ERR 500
 #define NOT_IMPL 501
 
+
+//Some useful typedefs
 typedef enum msgType {HELLO=0,REQ, RESP} msgType;
 
 typedef struct msgContents{
@@ -76,10 +78,10 @@ typedef struct transaction {
 	double amount;
 } transaction;
 
+//SecCTP helper functions
 int generateHello(char *msg, char *method,char *headers, char *body);
 int generateReq(char *msg, char *method, char *uri,char *headers, char *body); 
 int generateResp(char *msg, int status_code,char *headers, char *body);
-
 int parseMessage(msgContents *contents, char *msg);
 int authorization(char *headers);
 

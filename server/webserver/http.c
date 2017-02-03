@@ -22,7 +22,7 @@
 #define ERROR_PAGE "<html><head><title>Error</title></head><body>Error</body></html>"
 #define UNAUTH "<html><head><title>Authorization Failure</title></head><body>Invalid credentials supplied</body></html>"
 #define WORKING "<html><head><title>Processing</title></head><body>Processing request...</body></html>"
-#define  PROCESSED "<html><head><title>Success</title></head><body>Payment submitted successfully</body></html>"
+#define PROCESSED "<html><head><title>Success</title></head><body>Payment submitted successfully</body></html>"
 
 #define POSTBUFFERSIZE  512
 #define GET 0
@@ -250,14 +250,14 @@ static int generate_page (void *cls,
 		}
 	
 		debug_message("Address = %s\n",msg)																					
-	    processAuth(msg);
-		if (  (MHD_queue_response (connection, MHD_HTTP_OK, processed_response) == MHD_NO) )  
-			on_error("Error in queue resp\n")
-		} else {			
-			if ( MHD_queue_response (connection, MHD_HTTP_FORBIDDEN, forbidden_response) == MHD_NO) 
-				on_error("Error in queue not auth resp\n")
+	    if (processAuth(msg)) {
+			if (  (MHD_queue_response (connection, MHD_HTTP_OK, processed_response) == MHD_NO) )  
+				on_error("Error in queue resp\n")
+			} else {			
+				if ( MHD_queue_response (connection, MHD_HTTP_FORBIDDEN, forbidden_response) == MHD_NO) 
+					on_error("Error in queue not auth resp\n")
+			}	
 		}	
-	
 	}
 	else if (suspend && (NULL != (response = MHD_create_response_from_fd (buf.st_size, fd))) ) {
 		
@@ -270,7 +270,8 @@ static int generate_page (void *cls,
 		} else {			
 			if ( MHD_queue_response (connection, MHD_HTTP_FORBIDDEN, forbidden_response) == MHD_NO) 
 				on_error("Error in queue not resp\n")
-		}						
+		}
+		suspend = 0;						
 	}
 	else {
 		/* internal error */
