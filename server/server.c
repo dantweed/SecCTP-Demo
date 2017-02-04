@@ -193,7 +193,7 @@ int main(int argc, char **argv)
 			}
 			else {
 				buffer[bytes_rcvd] = '\0';
-				if (NULL == trans)
+				if (!trans)
 					trans = (transaction *) malloc(sizeof(transaction));
 				
 				if ( (ret = strcspn(buffer, ":")) == strlen(buffer)) 
@@ -423,10 +423,10 @@ int processSecCTP(int sock) {
 			
 							if (contents.type == HELLO ) { //Assume compatabilty for now
 								if (!msg) msg = (char*)calloc(MAX_BUF, sizeof(char));
-								if (NULL == trans)
+								if (!trans)
 									ret =  generateResp(msg, SECOK, NULL, NULL);
 								else {
-									//After obtaining user credentials, format to header and transmit
+									//Format transaction details to header and add to response
 									headers = (char*)calloc(MAX_HEADER_SIZE, sizeof(char));
 									if (headers == NULL)
 										on_error("memory allocation error");									
@@ -444,7 +444,10 @@ int processSecCTP(int sock) {
 								ret = -1;								
 						}
 						if (headers) free(headers);
-					
+						if (trans) {
+							free(trans);
+							trans = NULL;
+						}
 						debug_message("after step2 ret %d\n",ret);
 						break;
 					case 3: /* Authentication */ 
@@ -550,10 +553,7 @@ int processSecCTP(int sock) {
 		free(msg);
 		msg = NULL;
 	}
-	if (trans) {
-		free(trans);
-		trans = NULL;
-	}
+
 	if (contents.headers)
 		free(contents.headers);
 	
@@ -609,8 +609,7 @@ static int wait_for_connection(int fd)
 
         FD_SET(fd, &rd);
 
-        /* waiting part */
-        debug_message("Waiting for connection...\n");
+        /* waiting part */        
         n = select(fd + 1, &rd, &wr, NULL, NULL);                
         if (n == -1 && errno == EINTR) 
                 return -1;
