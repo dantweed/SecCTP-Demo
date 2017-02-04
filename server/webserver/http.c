@@ -14,26 +14,12 @@
 #include <ctype.h>
 #include <microhttpd.h>
 
-#include "../server.h"
 #include <mqueue.h>
 #include <signal.h>
 #include <errno.h>
 
-#define ERROR_PAGE "<html><head><title>Error</title></head><body>Error</body></html>"
-#define UNAUTH "<html><head><title>Authorization Failure</title></head><body>Invalid credentials supplied</body></html>"
-#define WORKING "<html><head><title>Processing</title></head><body>Processing request...</body></html>"
-#define PROCESSED "<html><head><title>Success</title></head><body>Payment submitted successfully</body></html>"
-
-#define POSTBUFFERSIZE  512
-#define GET 0
-#define POST 1
-
-
-struct connection_info_struct {
-  int connectiontype;
-  char *answerstring;
-  struct MHD_PostProcessor *postprocessor;
-};
+#include "../server.h"
+#include "http.h"
 
 int processAuth(char * msg) ;
 void sigTermHandler(int sig);
@@ -57,6 +43,7 @@ static void request_completed (void *cls,
 	struct MHD_Connection *connection,
 	void **con_cls, enum MHD_RequestTerminationCode toe);
 
+//Default responses
 static struct MHD_Response *error_response;
 static struct MHD_Response *working_response;
 static struct MHD_Response *forbidden_response;
@@ -66,6 +53,7 @@ static volatile int resume = 0;
 static volatile int forever = 1;
 static volatile int data = 0;
 
+//IPC 
 mqd_t mq_rcv;
 mqd_t mq_snd; 
 
@@ -79,12 +67,14 @@ int main (int argc, char **argv) {
 		printf("Usage: %s <webport> <send mqueue name> <recv mqueue name> <server pid> \n",argv[0]);
 		return EXIT_FAILURE;
 	} 
+	//Set up queues
 	server_pid = atoi(argv[4]);
 	if ( (mq_rcv = mq_open(argv[2], O_RDONLY)) == (mqd_t) -1 || (mq_snd = mq_open(argv[3], O_WRONLY)) == (mqd_t) -1) 
 		on_error("queue does not exist");
 		
 	int webport = atoi(argv[1]);
 		
+	//Set up signal handling
 	struct sigaction actTerm, actQueue;
 	memset(&actTerm, 0, sizeof(actTerm));
 	actTerm.sa_handler = &sigTermHandler;	
@@ -92,13 +82,13 @@ int main (int argc, char **argv) {
 	memset(&actQueue, 0, sizeof(actQueue));
 	actQueue.sa_flags = SA_SIGINFO;
 	actQueue.sa_sigaction = &sigQueueHandler;	
-	
-	
+		
 	if ( ( sigaction(SIGTERM, &actTerm, NULL)) < 0)
 		on_error("Error handling SIGTERM signal");	
 	if ( ( sigaction(SIGUSR2, &actQueue, NULL)) < 0)
 		on_error("Error handling SIGUSR1 signal");		
 			
+	// Some default responses
 	error_response = 
 		MHD_create_response_from_buffer (strlen (ERROR_PAGE),(void *) ERROR_PAGE, MHD_RESPMEM_PERSISTENT); 
 	working_response = 
@@ -112,7 +102,8 @@ int main (int argc, char **argv) {
 	
 	daemon = MHD_start_daemon (MHD_USE_SELECT_INTERNALLY|MHD_USE_SUSPEND_RESUME|MHD_USE_DEBUG, webport, NULL, 
 					NULL, &generate_page, NULL, MHD_OPTION_NOTIFY_COMPLETED, request_completed, NULL,  MHD_OPTION_END);
-
+	
+	//Run MHD daemon until SIGTERM received
 	if (NULL == daemon)
 		on_error("Error starting daemon");	
 	while(forever && daemon);
@@ -122,6 +113,7 @@ int main (int argc, char **argv) {
 	return EXIT_SUCCESS	;
 }
 
+/** Clean up  */
 static void
 request_completed (void *cls, struct MHD_Connection *connection,
                    void **con_cls, enum MHD_RequestTerminationCode toe)
@@ -142,12 +134,9 @@ request_completed (void *cls, struct MHD_Connection *connection,
   *con_cls = NULL;
 }
 
-static int generate_page (void *cls, 
-   struct MHD_Connection *connection,
-   const char *url,
-   const char *method,
-   const char *version,
-   const char *upload_data,
+/** Primary web server function - generate pages and ipc with SecCTP server */
+static int generate_page (void *cls, struct MHD_Connection *connection,
+   const char *url, const char *method, const char *version,const char *upload_data,
    size_t *upload_data_size, void **con_ref) {	   
 	   
 	struct MHD_Response *response;
@@ -163,9 +152,11 @@ static int generate_page (void *cls,
 				(0 != strcmp (method, MHD_HTTP_METHOD_POST)) 	)
 				return MHD_queue_response (connection, 	
 						MHD_HTTP_BAD_REQUEST, error_response);
-	if (NULL == *con_ref)    {
-      struct connection_info_struct *con_info;
-      con_info = malloc (sizeof (struct connection_info_struct));
+	
+	if (NULL == *con_ref)    { //First request, always return MHD_YES per libmicrohttpd
+		
+      struct connection_info_struct *con_info;  //Some connection tracking info
+      con_info = malloc (sizeof (struct connection_info_struct)); 
       if (NULL == con_info)
         return MHD_NO;
       con_info->answerstring = NULL; 
@@ -181,7 +172,7 @@ static int generate_page (void *cls,
 
           con_info->connectiontype = POST;
         }
-      else
+      else  //Currently, server only needs POST and BET
         con_info->connectiontype = GET;
 
       *con_ref = (void *) con_info;
@@ -189,7 +180,10 @@ static int generate_page (void *cls,
       return MHD_YES;
     }				
 	
+	//Subsequent connections, return requested page or signal SecCTP server
+	// that auth is required.
 	fd = -1;
+	
 	if (0 != strcmp (url, "/") && NULL == strstr(&url[1], "favicon.ico"))     { 
 		if ( (NULL == strstr (&url[1], "..")) && ('/' != url[1]) ) {
 			fd = open (&url[1], O_RDONLY);
@@ -207,7 +201,9 @@ static int generate_page (void *cls,
 		(void) close (fd);
 		fd = -1;
 	} 
+	
 	debug_message("main = %d -- suspend = %d -- post = %d\n",main,suspend,post);
+	//Different actions depending on connection state and page requested
 	if (main && -1 == fd ) 
 		return MHD_queue_response 
 				(connection, 	MHD_HTTP_BAD_REQUEST, error_response);
@@ -274,7 +270,7 @@ static int generate_page (void *cls,
 		suspend = 0;						
 	}
 	else {
-		/* internal error */
+		/* internal error - shoudl never get here */
 		(void) close (fd);
 		return MHD_queue_response (connection, 	MHD_HTTP_INTERNAL_SERVER_ERROR, error_response);
 		debug_message("Internal server error");
@@ -283,6 +279,7 @@ static int generate_page (void *cls,
 	return ret;
 }
 
+/** Processes IPC comm for web server request requiring SecCTP auth */
 int processAuth(char * msg) {
 	
 	char buffer[MAX_SIZE+1];	
@@ -303,8 +300,7 @@ int processAuth(char * msg) {
 			} else {
 				debug_message("signal sent\n");	
 			}
-		}	
-		//return 1; 							
+		}										
 	}
 	//Wait on client auth
 	if ( (bytes_rcvd = mq_receive(mq_rcv, buffer, MAX_SIZE, NULL) ) < 0) 
@@ -316,14 +312,18 @@ int processAuth(char * msg) {
 }
 
 
+/** Asynchronous signal handlers */
 void sigTermHandler(int sig) {	
-	forever = 0;
+	forever = 0; //Program terminate signal received
 }
 
 void sigQueueHandler(int sig, siginfo_t *info, void *drop) {	
-	suspend = 0;	
+	suspend = 0;	//Server signalled response available
 }
 
+/** Post processor fiedl iterator
+ * 	Currently only support pmtAmt keys for demo.
+ * */
 static int
 iterate_post (void *coninfo_cls, enum MHD_ValueKind kind, const char *key,
               const char *filename, const char *content_type,

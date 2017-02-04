@@ -209,7 +209,15 @@ int parseMessage(msgContents *contents, char *msg) {
 	return ret;
 }
 
-/* For now assume credentials are secctp:pass */
+
+/** Temporary basic authorization function
+ * 
+ * @param headers Pointer to entire SecCTP message headers field
+ * 
+ * @return 0 for success, non-zero indicates authentication failure
+ * 
+ * Assumes credentials are always default example secctp:pass
+*/
 int authorization(char *headers) {
 	int ret = 0;
 	char creds[MAX_CRED_LENGTH];

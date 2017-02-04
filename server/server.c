@@ -22,28 +22,6 @@
 #include "server.h"
 #include <signal.h>
 
-#define KEYFILE "./certs/server-key.pem"
-#define CERTFILE "./certs/cert.pem"
-#define CAFILE "./certs/ca-cert.pem"
-
-#define SENDQUEUE "/server_queue_snd"
-#define RECVQUEUE "/server_queue_rcv"
-
-#define WEB_DIR "webserver"
-
-#define MAX_BUF 1024
-#define WEBPORT "8888"
-#define DONE -1
-
-
-typedef struct {
-        gnutls_session_t session;
-        int fd;
-        struct sockaddr *cli_addr;
-        socklen_t cli_addr_size;
-} priv_data_st;
-
-
 static int pull_timeout_func(gnutls_transport_ptr_t ptr, unsigned int ms);
 static ssize_t push_func(gnutls_transport_ptr_t p, const void *data,
                          size_t size);
@@ -73,10 +51,17 @@ void sigHandler(int sig);
 void sigQueueHandler(int sig, siginfo_t *info, void *drop);
 int udp_connect(int port, const char *server);
 
-
 int web_pid;
 int secCTPport;
 transaction *trans = NULL; 
+
+
+typedef struct {
+        gnutls_session_t session;
+        int fd;
+        struct sockaddr *cli_addr;
+        socklen_t cli_addr_size;
+} priv_data_st;
 
 int main(int argc, char **argv)
 {
@@ -90,6 +75,7 @@ int main(int argc, char **argv)
 	struct sockaddr_in sa_serv;
 	struct sockaddr_in clientaddr; 	
 	socklen_t clientlen = sizeof(clientaddr);	 
+	
 	if (argc != 2) {
 		secCTPport = atoi(DEFAULT_SECCTP_PORT);
 		webport = WEBPORT;
@@ -98,10 +84,10 @@ int main(int argc, char **argv)
 		secCTPport = atoi(argv[1]);	
 		webport = argv[2];
 	}
-	debug_message("server set webport %s\n", webport);
+	debug_message("Server set webport %s\n", webport);
 	
 	struct mq_attr attr;	
-	 /* initialize the queue attributes */
+	 /* Initialize the queues */
     attr.mq_flags = 0;
     attr.mq_maxmsg = 2;
     attr.mq_msgsize = MAX_SIZE;
@@ -112,6 +98,7 @@ int main(int argc, char **argv)
 			on_error("Error opening queue %d", errno);	
 	own_pid = getpid();
 	
+	//Launch webserver 
 	if ( snprintf(pid_buf,10, "%d", own_pid) > 0 && (web_pid = fork()) == 0) { /* If queues open, run webserver in a separate process */	
 		if (chdir(WEB_DIR) < 0)
 			on_error("Error with chdir %d", errno);
@@ -120,6 +107,7 @@ int main(int argc, char **argv)
 	}
 	debug_message("web %d\n", web_pid);
 	
+	//Handle signals 
 	struct sigaction act, actQueue;
 	memset(&act, 0, sizeof(act));
 	act.sa_handler = &sigHandler;
@@ -161,8 +149,8 @@ int main(int argc, char **argv)
 	if ( bind(listen_sd, (struct sockaddr *) &sa_serv, sizeof(sa_serv)) < 0)
 		on_error("ERROR on binding server 1%d", errno);
 	printf("SecCTP server ready. Listening to port '%d'.\n\n", secCTPport);
-	while (forever) {
-		
+	
+	while (forever) { //Main loop - waits for connection from client or message from webserver		
 		for (;forever && !trigger;) {			
 			debug_message("Waiting for connection...\n");
 			sock = wait_for_connection(listen_sd);		
@@ -179,9 +167,10 @@ int main(int argc, char **argv)
 					on_error("ERROR on binding server2 %d", errno);
 			}
 		}
-		if (!forever)
+		
+		if (!forever)  //Program termination signal received
 			close(listen_sd);
-		else {
+		else {  //Webserver requesting server initiated SecCTP transaction
 			char buffer[MAX_SIZE+1];
 			char resp[MAX_BUF];	
 			struct sockaddr_in addr; 	
@@ -191,7 +180,7 @@ int main(int argc, char **argv)
 			if ( (bytes_rcvd = mq_receive(mq_rcv, buffer, MAX_SIZE, NULL) ) <= 0) {
 				on_error("Queue error %d",errno);
 			}
-			else {
+			else {  //Valid request from webserver, send unsecured Hello msg to client
 				buffer[bytes_rcvd] = '\0';
 				if (!trans)
 					trans = (transaction *) malloc(sizeof(transaction));
@@ -222,7 +211,7 @@ int main(int argc, char **argv)
 					on_error("Invalid server response to initial Hello\n");
 				
 				if (contents.type == RESP && contents.status == SECOK) {
-					secCTPstep = 2; //Client will send DTLS hello as next step
+					secCTPstep = 2; //Client will send DTLS hello as next step (handled by main FSM)
 					close(sd);  
 				}
 				else {
@@ -240,6 +229,7 @@ int main(int argc, char **argv)
 		}
 	}	
 	
+	//Clean up and close webserver	  
 	if ( kill(web_pid, SIGTERM) < 0 ) 
 		on_error("Error killing web server");
 	mq_close(mq_snd);
@@ -252,9 +242,10 @@ int main(int argc, char **argv)
 
 	gnutls_global_deinit();
 
-	return 0;
+	return EXIT_SUCCESS;
 }
 
+/** SecCTP transactions handled via multilevel state machine */
 int processSecCTP(int sock) {
 	
 	struct sockaddr_in cli_addr;
@@ -273,25 +264,24 @@ int processSecCTP(int sock) {
 	int mtu = 1400;
 	unsigned char sequence[8];	
 	int authorized = 0;
-	int attempts;
+	int attempts;	
 	
-	
-	debug_message("before outer while, fd %d CTPstep %d dtlsStep %d\n",sock,secCTPstep,dtlsStep);		
+	debug_message("Outer while, fd %d CTPstep %d dtlsStep %d\n",sock,secCTPstep,dtlsStep);		
 	switch(secCTPstep) {
-		case 1: /* Expect unsecured hello message */ 	
+		case 1: /* Expecting unsecured hello message */ 	
 			if (!msg) msg = (char*)calloc(MAX_BUF, sizeof(char));
 			ret = recvfrom(sock, buffer, sizeof(buffer)-1, 0,
 				   (struct sockaddr *) &cli_addr,
 				   &cli_addr_size);
-				   debug_message("recvd,\n%s\n",buffer)
+				   debug_message("Recvd,\n%s\n",buffer)
 				  
 			if (ret > 0) {
-					   // check if valid hello
+				// check if valid hello
 					   /* parse msg; if good, continue */ 
 				if ( (ret = parseMessage(&contents, buffer)) < 0) 
 					on_error("Invalid hello: server\n");
 				
-				if (contents.type == HELLO ) { //Assume compatabilty for now
+				if (contents.type == HELLO ) { //Assume compatabilty on SecCTP version/protocols
 					if ( (ret =  generateResp(msg, SECOK, NULL, NULL)) > 0 ) {		
 						debug_message("server resp\n %s\n",msg);
 						if ( (ret = sendto(sock, msg, strlen(msg), 0, (struct sockaddr *) &cli_addr,cli_addr_size)) > 0)   {            
@@ -310,16 +300,16 @@ int processSecCTP(int sock) {
 			}
 			free (msg);
 			msg = NULL;
-			debug_message("end of init hello ret %d CTPstep %d\n",msg,secCTPstep);			
+			debug_message("End of initial hello: ret %d CTPstep %d\n",msg,secCTPstep);			
 			break;
 			
-		case 2: /* DTLS transaction */		
+		case 2: /* Secured (DTLS) parts of the transaction */		
 			dtlsStep = 1;
-			debug_message("before inner while, fd %d CTPstep %d dtlsStep %d\n",sock,secCTPstep,dtlsStep);				
+			debug_message("Inner while, fd %d CTPstep %d dtlsStep %d\n",sock,secCTPstep,dtlsStep);				
 			while (dtlsStep <= 4 && dtlsStep != DONE && ret >= 0) {	
-				switch(dtlsStep) {
+				switch(dtlsStep) { //Inner FSM for DTLS part
 					case 1: /* DTLS Handshake */
-					debug_message("in handshake\n");
+						debug_message("Beginning handshake\n");
 						ret = recvfrom(sock, buffer, sizeof(buffer), MSG_PEEK,
 								(struct sockaddr *) &cli_addr,
 								&cli_addr_size);
@@ -381,7 +371,7 @@ int processSecCTP(int sock) {
 						gnutls_transport_set_pull_function(session, pull_func);
 						gnutls_transport_set_pull_timeout_function(session,
 																   pull_timeout_func);
-						debug_message("Starting handshake %d\n",ret);
+						debug_message("Ready for actual handshake (%d)\n",ret);
 						do {
 								ret = gnutls_handshake(session);
 						} while (ret == GNUTLS_E_INTERRUPTED|| ret == GNUTLS_E_AGAIN);
@@ -393,7 +383,7 @@ int processSecCTP(int sock) {
 						} 
 						else 
 							dtlsStep = 2;
-						debug_message("after handshake ret %d\n",ret);	
+						debug_message("Handshake compelted (%d)\n",ret);	
 						break;
 								
 					/* Actual message passing*/
@@ -415,9 +405,9 @@ int processSecCTP(int sock) {
 
 						if (ret > 0) {
 							buffer[ret] = 0;
-							debug_message("2nd dtls msg\n%s\n",buffer);
+							debug_message("2nd DTKS msg\n%s\n",buffer);
 							if ( (ret = parseMessage(&contents, buffer)) < 0) 
-								on_error("invalid message");
+								on_error("Invalid message received\n");
 			
 							if (contents.type == HELLO ) { //Assume compatabilty for now
 								if (!msg) msg = (char*)calloc(MAX_BUF, sizeof(char));
@@ -427,12 +417,12 @@ int processSecCTP(int sock) {
 									//Format transaction details to header and add to response
 									headers = (char*)calloc(MAX_HEADER_SIZE, sizeof(char));
 									if (headers == NULL)
-										on_error("memory allocation error");									
-									sprintf(headers, "Transaction: Payment %.2lf\r\n", trans->amount);
+										on_error("Memory allocation error");									
+									sprintf(headers, "%s %.2lf\r\n", TRANS_TAG, trans->amount);
 									ret =  generateResp(msg, UNAUTH, headers , NULL);
 								}
 								if ( ret > 0 ) {
-									debug_message("dtls resp\n%s\n",msg);
+									debug_message("DTLS resp\n%s\n",msg);
 									if ( ( ret = gnutls_record_send(session, msg, strlen(msg)) ) > 0 ) 									
 										dtlsStep = 3;					
 								}
@@ -475,7 +465,7 @@ int processSecCTP(int sock) {
 								buffer[ret] = 0;
 								
 								if ( (ret = parseMessage(&contents, buffer)) < 0) 
-									on_error("invalid message from client");
+									on_error("Invalid message received\n");
 								
 								debug_message("3rd dtls msg\n%s\n",buffer);
 								if (contents.type == REQ ) { 
@@ -517,17 +507,17 @@ int processSecCTP(int sock) {
 						if (authorized) {
 							ret = mq_send(mq_snd, AUTHORIZED, strlen(AUTHORIZED), 0);						
 												
-							debug_message("msg sent %d\n", ret);
+							debug_message("Msg sent (%d)\n", ret);
 							if (ret < 0) {  
-								on_error("Error in send %d\n", errno); 
+								on_error("Error in send (%d)\n", errno); 
 							} else {
 								union sigval auth;
 								auth.sival_int = authorized;	
 								
 								if ( (ret = sigqueue(web_pid, SIGUSR2, auth)) < 0) {
-									on_error("error in signal %d\n",errno);
+									on_error("Error in signal (%d)\n",errno);
 								} else {
-									debug_message("signal sent\n");	
+									debug_message("Signal sent\n");	
 								}
 							}																												
 						}
@@ -565,6 +555,21 @@ int processSecCTP(int sock) {
 	return ret;
 }
 
+/** Simple handling of SIGINT to cleanly close the applications */
+void sigHandler(int sig) {
+	forever = 0;
+}
+
+/** Signal to check webserver queue */
+void sigQueueHandler(int sig, siginfo_t *info, void *drop) {	
+	debug_message("SIGUSR rec'd\n");
+	trigger = 1;
+}
+
+/************************************************************************/
+/** GNUTLS initialization/maintenance functions based on gnutls examples*/
+/** 		Public domain code											*/
+/************************************************************************/
 int initgnutls(){
 	int ret;
 
@@ -793,13 +798,3 @@ int udp_connect(int port, const char *server) {
 	return sd;
 }
 
-//Simple handling of SIGINT to cleanly close the applications
-void sigHandler(int sig) {
-	forever = 0;
-}
-
-//Signal to check webserver queue
-void sigQueueHandler(int sig, siginfo_t *info, void *drop) {	
-	debug_message("SIGUSR rec'd\n");
-	trigger = 1;
-}

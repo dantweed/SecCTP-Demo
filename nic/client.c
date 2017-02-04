@@ -170,7 +170,7 @@ int main(int argc, char *argv[]) {
 	if (initgnutls() < 0) 
 		on_error("*** Error initializing gnutls");	
 	   
-    /*
+    /*  Not currently implemented
     if ( (synergy = fork()) == 0) { // everything else checks out, start synergy for keyboard/mouse sharing	
 		if ( (execl("/usr/bin/synergys", "synergys", "--address", "localhost:24800",(char*) NULL)) < 0) 
 			on_error("1:Error starting synergy %d\n", errno);
@@ -185,6 +185,8 @@ int main(int argc, char *argv[]) {
 		if ( (conn_fd = wait_for_connection(sec_fd, tcp_fd) ) < 0 && forever) 
 			on_error("ERROR on connection..\n");		
 		if (forever && conn_fd > 0) { //Covers case of sig interupt out of accept block
+			
+			
 			/* On accept, kill synergy for now and get request details 
 			fprintf(stderr,"killing syn\n");fflush(stderr);
 			if ( ( ret = kill(synergy, SIGTERM)) < 0 ) 
@@ -302,35 +304,9 @@ int main(int argc, char *argv[]) {
     return EXIT_SUCCESS;
 }
 
-static int wait_for_connection(int udp_fd, int tcp_fd) {
-	fd_set rd,wr;
-	int n, max_fd;
-	
-	max_fd = (udp_fd > tcp_fd) ? udp_fd: tcp_fd;
-			
-	FD_ZERO(&rd);    	     
-	FD_ZERO(&wr);    	     
-	FD_SET(udp_fd, &rd);
-	FD_SET(tcp_fd, &rd);	
-	
-	/* waiting part */
-	n = select(max_fd + 1, &rd, &wr, NULL, NULL);        
-
-	if (n < 0) {
-		debug_message("select() - %d", errno);
-		return -1;			
-	}	
-	
-	if (FD_ISSET(udp_fd,&rd))
-		return udp_fd;
-	if (FD_ISSET(tcp_fd,&rd))
-		return tcp_fd;
-	return -1;
-	
-}
-
-
-/* Validates that this is an active session and validates server details */
+/** Validates that this is an active session and checks server details 
+ * 		against DNS
+ * */
 int validateServer(serverDetails *secCTPserver) {
 	struct addrinfo *res= NULL, *p, hints;
 	int ret;
@@ -360,7 +336,7 @@ int validateServer(serverDetails *secCTPserver) {
 			} // else ignore IPv6 for now			
 		}
 
-		freeaddrinfo(res); // free the linked list	
+		freeaddrinfo(res); // free the results list	
 	}
 	else {
 		if (secCTPserver->hostname)
@@ -392,9 +368,9 @@ int validateServer(serverDetails *secCTPserver) {
 	}	
 	debug_message("End of server validation %d\n", result); 
 	return result;
-	
 }
 
+/** PC monitor app mesage parsing */
 int parseUserPCmsg(serverDetails *secCTPserver, char *buf){
 	int count = 0;
 	char *pch = strtok(buf, "-");
@@ -419,7 +395,9 @@ int parseUserPCmsg(serverDetails *secCTPserver, char *buf){
 	return count;
 }
 
-/*Assume only a single trasnactions (i.e. is blocking) */
+/** SecCTP transactions handled via multilevel state machine 
+ * 
+ * Assume only a single trasnactions (i.e. is blocking) */
 int processSecCTP(serverDetails *secCTPserver, int init_step) { 
 	char resp[MAX_BUF];
 	char *msg = NULL;	
@@ -569,6 +547,7 @@ int processSecCTP(serverDetails *secCTPserver, int init_step) {
    	return ret;
 }
 
+/** Manages User IO via curses UI */
 int userIO (char *resp, char *hostname, char *details, int attempts){  
 	int ret = -1;
 	char uname[UNAME_LENGTH];
@@ -610,6 +589,43 @@ int userIO (char *resp, char *hostname, char *details, int attempts){
 	ret = sprintf(resp,"%s:%s\r\n",uname,pwd);		
 	debug_message("I/O complete\n");
 	return ret;
+}
+
+/** Simple handling of SIGINT to cleanly close the applications */
+void sigHandler(int sig) {
+	forever = 0;
+}
+
+
+/************************************************************************/
+/** GNUTLS initialization/maintenance functions based on gnutls examples*/
+/** 		Public domain code											*/
+/************************************************************************/
+static int wait_for_connection(int udp_fd, int tcp_fd) {
+	fd_set rd,wr;
+	int n, max_fd;
+	
+	max_fd = (udp_fd > tcp_fd) ? udp_fd: tcp_fd;
+			
+	FD_ZERO(&rd);    	     
+	FD_ZERO(&wr);    	     
+	FD_SET(udp_fd, &rd);
+	FD_SET(tcp_fd, &rd);	
+	
+	/* waiting part */
+	n = select(max_fd + 1, &rd, &wr, NULL, NULL);        
+
+	if (n < 0) {
+		debug_message("select() - %d", errno);
+		return -1;			
+	}	
+	
+	if (FD_ISSET(udp_fd,&rd))
+		return udp_fd;
+	if (FD_ISSET(tcp_fd,&rd))
+		return tcp_fd;
+	return -1;
+	
 }
 
 int dtls_connect(serverDetails *secCTPserver){
@@ -750,7 +766,3 @@ int udp_connect(int port, const char *server) {
 	return sd;
 }
 
-//Simple handling of SIGINT to cleanly close the applications
-void sigHandler(int sig) {
-	forever = 0;
-}
