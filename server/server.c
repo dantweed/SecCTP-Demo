@@ -169,7 +169,7 @@ int main(int argc, char **argv)
 			
 			if (forever && sock > 0 )  /* else error on attempted connect */			
 				processSecCTP(sock);	
-			//if (secCTPstep == 1) {
+			if (secCTPstep == 1) {
 				
 				listen_sd = socket(AF_INET, SOCK_DGRAM, 0);
 				setsockopt(listen_sd, IPPROTO_IP, IP_MTU_DISCOVER,
@@ -177,7 +177,7 @@ int main(int argc, char **argv)
 				setsockopt(listen_sd, SOL_SOCKET, SO_REUSEADDR, &(int){ 1 }, sizeof(int));
 				if ( bind(listen_sd, (struct sockaddr *) &sa_serv, sizeof(sa_serv)) < 0)
 					on_error("ERROR on binding server2 %d", errno);
-			//}
+			}
 		}
 		if (!forever)
 			close(listen_sd);
@@ -234,6 +234,8 @@ int main(int argc, char **argv)
 					msg = NULL;
 				}	
 			}
+			if (contents.headers)
+				free(contents.headers);
 			trigger = 0;
 		}
 	}	
@@ -306,12 +308,8 @@ int processSecCTP(int sock) {
 					ret = -1;	
 				}			
 			}
-			
-			if (msg) {
-				free(msg);
-				msg = NULL;
-			}
-			
+			free (msg);
+			msg = NULL;
 			debug_message("end of init hello ret %d CTPstep %d\n",msg,secCTPstep);			
 			break;
 			
@@ -443,7 +441,10 @@ int processSecCTP(int sock) {
 							else 
 								ret = -1;								
 						}
-						if (headers) free(headers);
+						if (headers) {
+							free(headers);
+							headers = NULL;
+						}
 						if (trans) {
 							free(trans);
 							trans = NULL;
@@ -549,10 +550,11 @@ int processSecCTP(int sock) {
 		gnutls_deinit(session);			
 		debug_message("Socket closed and dtls session deinit\n");
 	}
+	
 	if (msg) {
 		free(msg);
 		msg = NULL;
-	}
+	}	
 
 	if (contents.headers)
 		free(contents.headers);

@@ -71,7 +71,7 @@ int main(int argc, char *argv[]) {
 	
 	struct sigaction act;
 	
-	serverDetails secCTPserver; 
+	serverDetails secCTPserver ={NULL,NULL,NULL,0}; 
 	
 	struct mq_attr attr;	
 	 /* initialize the queue attributes */
@@ -229,6 +229,10 @@ int main(int argc, char *argv[]) {
 					free(msg);
 					msg = NULL;
 				}
+				if (contents.headers) {
+					free(contents.headers);
+					contents.headers = NULL;
+				}		
 				secCTPserver.port = SECCTPPORT;
 				init_step = 2;
 			}
@@ -281,7 +285,8 @@ int main(int argc, char *argv[]) {
 	close(tcp_fd);
 	close(sec_fd);
     dtls_deinit();
-	
+	if (secCTPserver.hostname)
+		free(secCTPserver.hostname);
 	/*
 	if ( synergy && ( ret = kill(synergy, SIGTERM)) < 0 ) 
 		on_error("Error killing synergy"); */
@@ -358,7 +363,10 @@ int validateServer(serverDetails *secCTPserver) {
 		freeaddrinfo(res); // free the linked list	
 	}
 	else {
-		secCTPserver->hostname = (char*)calloc(NI_MAXHOST, sizeof(char));
+		if (secCTPserver->hostname)
+			secCTPserver->hostname[0] = '\0';
+		else
+			secCTPserver->hostname = (char*)calloc(NI_MAXHOST, sizeof(char));
 		struct in_addr addr;  
 		struct hostent *hp;
 		if ( inet_aton(secCTPserver->addr, &addr)  &&
@@ -476,6 +484,7 @@ int processSecCTP(serverDetails *secCTPserver, int init_step) {
 						step = 3;
 						if (contents.status == UNAUTH) {							
 							headers = contents.headers;								
+							contents.headers = NULL;
 						}					
 					}
 					else 
@@ -554,7 +563,8 @@ int processSecCTP(serverDetails *secCTPserver, int init_step) {
 	debug_message("After deinit/reinit gnutls %d\n",ret);
 	if (msg) 
 		free (msg);  
- 
+	if (contents.headers)
+		free(contents.headers);
 	close(sd);	
    	return ret;
 }
