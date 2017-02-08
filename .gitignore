@@ -37,6 +37,7 @@
 *.txt
 *.geany
 
-#certs
-*.pem
-*.csr
+#certs for local not ignored
+#*.pem
+#*.csr
+
