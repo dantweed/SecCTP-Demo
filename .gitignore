@@ -38,5 +38,5 @@
 *.geany
 
 #certs
-*.pem
-*.csr
+#*.pem
+#*.csr
