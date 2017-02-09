@@ -126,14 +126,14 @@ int main(int argc, char **argv)
 		on_error("*** Error initializing gnutls.");	
 	
 	/* Socket operations */
-	listen_sd = socket(AF_INET, SOCK_DGRAM, 0);
+	//listen_sd = socket(AF_INET, SOCK_DGRAM, 0);
 	
 	memset(&sa_serv, '\0', sizeof(sa_serv));
 	sa_serv.sin_family = AF_INET;
 	sa_serv.sin_addr.s_addr = INADDR_ANY;
 	sa_serv.sin_port = htons(secCTPport);
 
-	{ /* DTLS requires the IP don't fragment (DF) bit to be set */
+/*	{ /* DTLS requires the IP don't fragment (DF) bit to be set 
 #if defined(IP_DONTFRAG)
 	optval = 1;
 	setsockopt(listen_sd, IPPROTO_IP, IP_DONTFRAG,
@@ -147,17 +147,12 @@ int main(int argc, char **argv)
 	
 	setsockopt(listen_sd, SOL_SOCKET, SO_REUSEADDR, &(int){ 1 }, sizeof(int));
 	if ( bind(listen_sd, (struct sockaddr *) &sa_serv, sizeof(sa_serv)) < 0)
-		on_error("ERROR on binding server 1%d", errno);
+		on_error("ERROR on binding server 1%d", errno);*/
 	printf("SecCTP server ready. Listening to port '%d'.\n\n", secCTPport);
 	
 	while (forever) { //Main loop - waits for connection from client or message from webserver		
 		for (;forever && !trigger;) {			
-			debug_message("Waiting for connection...\n");
-			sock = wait_for_connection(listen_sd);		
-			
-			if (forever && sock > 0 )  /* else error on attempted connect */			
-				processSecCTP(sock);	
-			if (secCTPstep == 1) {
+			if (!trigger || secCTPstep == 1) {
 				
 				listen_sd = socket(AF_INET, SOCK_DGRAM, 0);
 				setsockopt(listen_sd, IPPROTO_IP, IP_MTU_DISCOVER,
@@ -166,6 +161,13 @@ int main(int argc, char **argv)
 				if ( bind(listen_sd, (struct sockaddr *) &sa_serv, sizeof(sa_serv)) < 0)
 					on_error("ERROR on binding server2 %d", errno);
 			}
+			
+			debug_message("Waiting for connection (%d)...\n",listen_sd);
+			sock = wait_for_connection(listen_sd);		
+			
+			if (forever && sock > 0 )  /* else error on attempted connect */			
+				processSecCTP(sock);	
+			
 		}
 		
 		if (!forever)  //Program termination signal received
@@ -537,8 +539,8 @@ int processSecCTP(int sock) {
 		secCTPstep = 1; //Reset outer switch condition 
 		close(sock);		
 		gnutls_bye(session, GNUTLS_SHUT_WR);
-		gnutls_deinit(session);			
-		debug_message("Socket closed and dtls session deinit\n");
+		//gnutls_deinit(session);			
+		debug_message("Socket closed and dtls session close\n");
 	}
 	
 	if (msg) {

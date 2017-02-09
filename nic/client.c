@@ -658,7 +658,7 @@ int dtls_connect(serverDetails *secCTPserver){
 	/* Note that DTLS may also receive GNUTLS_E_LARGE_PACKET */
 	debug_message("Handshake complete: %d\n", ret);
 	if (ret < 0) {
-		on_error("*** Handshake failed\n");
+		on_error("*** Handshake failed %d\n", ret);
 		gnutls_perror(ret);
 	} else {
 		/* For debugging */
@@ -726,6 +726,7 @@ int reInitgnutls() {
     ret = gnutls_init(&session, GNUTLS_CLIENT | GNUTLS_DATAGRAM);
 	if (ret >= 0)         /* Use default priorities */
 		ret = gnutls_set_default_priority(session);      
+    debug_message("GNUTLS re-init (%d)\n",ret);
     return ret;
 }
 
