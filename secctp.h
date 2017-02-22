@@ -14,13 +14,16 @@
 #define PWD_LENGTH 20
 #define UNAME_LENGTH 20
 #define MAX_CRED_LENGTH (UNAME_LENGTH+PWD_LENGTH)
+
 #define DEFAULT_CREDS "secctp:pass"
 #define AUTH_TAG "Authorization: Basic "
 #define TRANS_TAG "Transaction: Payment "
 #define AUTH_RETRIES 3
+#define DELIM "\r\n" //Message line delimeter for convenience
 
-#define MAX_HEADER_SIZE 1024 //Never reaches this max for SecCTP transactions
+#define MAX_HEADER_SIZE 1024 
 
+//Header constants
 #define DATE_FORMAT "Date: %a, %d %b %Y %H:%M:%S %Z\r\n"
 #define LANG "Accept-Language: en-gb, en\r\n" //Only accept engligh for now
 

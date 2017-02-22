@@ -57,8 +57,7 @@ int main(int argc, char* argv[]) {
         return EXIT_FAILURE;
     }
 
-    try {//TODO: More meaningful exit codes
-		
+    try {
         //Open the message queue for send/rec'd 
         if ( (mq_recv = mq_open(argv[2], O_RDONLY)) == (mqd_t) -1 || (mq_snd = mq_open(argv[3], O_WRONLY)) == (mqd_t) -1) {
 			on_error("queue does not exist ", errno);
@@ -74,7 +73,7 @@ int main(int argc, char* argv[]) {
 		//Create and join the thread and main
 		if (pthread_create(&thread, NULL, monitor, (void *)&sniffer))
 			return EXIT_FAILURE;        	
-        //Inf loop until kill received from top level applicationi
+        //Inf loop until kill received from top level application
         while (1) {
 			//Block on reading mqueue, act on message rec'd
 			// Either kill signal or request to check a connection request
@@ -87,16 +86,12 @@ int main(int argc, char* argv[]) {
 				return EXIT_SUCCESS;	
 			} 
 			else {				
-				std::string addr(buffer);
-								
-				IPv4Address check(addr);			
-			
+				std::string addr(buffer);								
+				IPv4Address check(addr);					
 				(active.find(check) == active.end())? response =  NOT_FOUND: response = FOUND;					
 				debug_message("sending from active ", response.c_str());
 				if ( mq_send(mq_snd, response.c_str(), strlen(response.c_str()), 0) < 0) 
-					on_error("error on send ", errno);
-				
-				
+					on_error("error on send ", errno);			
 			}			
 		}		
     }
@@ -128,7 +123,8 @@ void *monitor(void *args){
  */
 void on_new_connection(Stream& stream) {
     //Add new connect to list
-    active.insert(stream.server_addr_v4());         
+    active.insert(stream.server_addr_v4());      
+       
     //Only interested in the connections, not interested in the data
     stream.ignore_server_data();
     stream.ignore_client_data();    

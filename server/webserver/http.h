@@ -10,6 +10,8 @@
 #define GET 0
 #define POST 1
 
+#define PMT_KEY "pmtAmt"
+
 struct connection_info_struct {
   int connectiontype;
   char *answerstring;

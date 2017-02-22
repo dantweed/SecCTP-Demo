@@ -153,7 +153,7 @@ static int generate_page (void *cls, struct MHD_Connection *connection,
 				return MHD_queue_response (connection, 	
 						MHD_HTTP_BAD_REQUEST, error_response);
 	
-	if (NULL == *con_ref)    { //First request, always return MHD_YES per libmicrohttpd
+	if (NULL == *con_ref)    { //First request, always return MHD_YES as full request data not yet received
 		
       struct connection_info_struct *con_info;  //Some connection tracking info
       con_info = malloc (sizeof (struct connection_info_struct)); 
@@ -172,7 +172,7 @@ static int generate_page (void *cls, struct MHD_Connection *connection,
 
           con_info->connectiontype = POST;
         }
-      else  //Currently, server only needs POST and BET
+      else  //Currently, server only needs POST and GET
         con_info->connectiontype = GET;
 
       *con_ref = (void *) con_info;
@@ -182,12 +182,10 @@ static int generate_page (void *cls, struct MHD_Connection *connection,
 	
 	//Subsequent connections, return requested page or signal SecCTP server
 	// that auth is required.
-	fd = -1;
-	
+	fd = -1;	
 	if (0 != strcmp (url, "/") && NULL == strstr(&url[1], "favicon.ico"))     { 
 		if ( (NULL == strstr (&url[1], "..")) && ('/' != url[1]) ) {
-			fd = open (&url[1], O_RDONLY);
-			fd = 1;					
+			fd = open (&url[1], O_RDONLY);							
 			main = 0;
 		}		
 	}
@@ -202,7 +200,6 @@ static int generate_page (void *cls, struct MHD_Connection *connection,
 		fd = -1;
 	} 
 	
-	debug_message("main = %d -- suspend = %d -- post = %d\n",main,suspend,post);
 	//Different actions depending on connection state and page requested
 	if (main && -1 == fd ) 
 		return MHD_queue_response 
@@ -321,8 +318,8 @@ void sigQueueHandler(int sig, siginfo_t *info, void *drop) {
 	suspend = 0;	//Server signalled response available
 }
 
-/** Post processor fiedl iterator
- * 	Currently only support pmtAmt keys for demo.
+/** Post processor field iterator
+ * 	Currently only support pmtAmt key for demo.
  * */
 static int
 iterate_post (void *coninfo_cls, enum MHD_ValueKind kind, const char *key,
@@ -332,7 +329,7 @@ iterate_post (void *coninfo_cls, enum MHD_ValueKind kind, const char *key,
 {
   struct connection_info_struct *con_info = coninfo_cls;
 
-  if (0 == strcmp (key, "pmtAmt"))
+  if (0 == strcmp (key, PMT_KEY))
     {
       if ((size > 0) && (size <= 64))
         {

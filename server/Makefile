@@ -8,7 +8,6 @@ server:
 
 debug: webddg serverdbg
 
-
 webddg:
 	gcc -DDEBUG -g -fstack-protector-strong -o webserver/web.exe webserver/http.c -lmicrohttpd -lrt 
 

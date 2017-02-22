@@ -55,7 +55,6 @@ int web_pid;
 int secCTPport;
 transaction *trans = NULL; 
 
-
 typedef struct {
         gnutls_session_t session;
         int fd;
@@ -126,33 +125,15 @@ int main(int argc, char **argv)
 		on_error("*** Error initializing gnutls.");	
 	
 	/* Socket operations */
-	//listen_sd = socket(AF_INET, SOCK_DGRAM, 0);
-	
 	memset(&sa_serv, '\0', sizeof(sa_serv));
 	sa_serv.sin_family = AF_INET;
 	sa_serv.sin_addr.s_addr = INADDR_ANY;
 	sa_serv.sin_port = htons(secCTPport);
-
-/*	{ /* DTLS requires the IP don't fragment (DF) bit to be set 
-#if defined(IP_DONTFRAG)
-	optval = 1;
-	setsockopt(listen_sd, IPPROTO_IP, IP_DONTFRAG,
-			   (const void *) &optval, sizeof(optval));
-#elif defined(IP_MTU_DISCOVER)
-	optval = IP_PMTUDISC_DO;
-	setsockopt(listen_sd, IPPROTO_IP, IP_MTU_DISCOVER,
-			   (const void *) &optval, sizeof(optval));
-#endif
-	}
-	
-	setsockopt(listen_sd, SOL_SOCKET, SO_REUSEADDR, &(int){ 1 }, sizeof(int));
-	if ( bind(listen_sd, (struct sockaddr *) &sa_serv, sizeof(sa_serv)) < 0)
-		on_error("ERROR on binding server 1%d", errno);*/
-	printf("SecCTP server ready. Listening to port '%d'.\n\n", secCTPport);
+	debug_message("SecCTP server ready. Listening to port '%d'.\n\n", secCTPport);
 	
 	while (forever) { //Main loop - waits for connection from client or message from webserver		
 		for (;forever && !trigger;) {			
-			if (!trigger || secCTPstep == 1) {
+			if (!trigger || secCTPstep == 1 || sock < 0) {
 				
 				listen_sd = socket(AF_INET, SOCK_DGRAM, 0);
 				setsockopt(listen_sd, IPPROTO_IP, IP_MTU_DISCOVER,
@@ -203,17 +184,17 @@ int main(int argc, char **argv)
 					on_error("Connection error on initial Hello");	   
 				if ((n = send(sd, msg, strlen(msg), 0)) < 0)
 					on_error("ERROR in send initial Hello");
-				/* block on wait for client's reply */				
+				/* Block on wait for client's reply */				
 				if ( (n = recvfrom(sd, resp, MAX_BUF - 1, 0, (struct sockaddr *)&addr,  &addrlen)) < 0) 
 				  	on_error("ERROR in recv initial Hello resp");
 				resp[n] = '\0';
 				debug_message("Response (%d bytes)= %s \n",n, resp);
-			   /* parse response; if good, continue */ 
+			   /* Parse response; if good, continue */ 
 				if ( (ret = parseMessage(&contents, resp)) < 0) 
 					on_error("Invalid server response to initial Hello\n");
 				
 				if (contents.type == RESP && contents.status == SECOK) {
-					secCTPstep = 2; //Client will send DTLS hello as next step (handled by main FSM)
+					secCTPstep = 2; //Client will send DTLS hello as next step 
 					close(sd);  
 				}
 				else {
@@ -268,7 +249,7 @@ int processSecCTP(int sock) {
 	int authorized = 0;
 	int attempts;	
 	
-	debug_message("Outer while, fd %d CTPstep %d dtlsStep %d\n",sock,secCTPstep,dtlsStep);		
+	debug_message("Outer while, fd %d secCTPstep %d dtlsStep %d\n",sock,secCTPstep,dtlsStep);		
 	switch(secCTPstep) {
 		case 1: /* Expecting unsecured hello message */ 	
 			if (!msg) msg = (char*)calloc(MAX_BUF, sizeof(char));
@@ -285,7 +266,7 @@ int processSecCTP(int sock) {
 				
 				if (contents.type == HELLO ) { //Assume compatabilty on SecCTP version/protocols
 					if ( (ret =  generateResp(msg, SECOK, NULL, NULL)) > 0 ) {		
-						debug_message("server resp\n %s\n",msg);
+						debug_message("Server resp\n %s\n",msg);
 						if ( (ret = sendto(sock, msg, strlen(msg), 0, (struct sockaddr *) &cli_addr,cli_addr_size)) > 0)   {            
 							secCTPstep = 2;					
 						} else  {
@@ -316,7 +297,6 @@ int processSecCTP(int sock) {
 								(struct sockaddr *) &cli_addr,
 								&cli_addr_size);
 						if (ret > 0) {	
-							//buffer[ret] = '\0';
 							debug_message("1st dtls msg\n%s\n",buffer);
 							/* dtls session and cookie setup */ 
 							memset(&prestate, 0, sizeof(prestate));
@@ -385,7 +365,7 @@ int processSecCTP(int sock) {
 						} 
 						else 
 							dtlsStep = 2;
-						debug_message("Handshake compelted (%d)\n",ret);	
+						debug_message("Handshake completed (%d)\n",ret);	
 						break;
 								
 					/* Actual message passing*/
@@ -407,11 +387,11 @@ int processSecCTP(int sock) {
 
 						if (ret > 0) {
 							buffer[ret] = 0;
-							debug_message("2nd DTKS msg\n%s\n",buffer);
+							debug_message("2nd DTLS msg\n%s\n",buffer);
 							if ( (ret = parseMessage(&contents, buffer)) < 0) 
 								on_error("Invalid message received\n");
 			
-							if (contents.type == HELLO ) { //Assume compatabilty for now
+							if (contents.type == HELLO ) { //Assume compatabilty for demo
 								if (!msg) msg = (char*)calloc(MAX_BUF, sizeof(char));
 								if (!trans)
 									ret =  generateResp(msg, SECOK, NULL, NULL);
@@ -441,7 +421,7 @@ int processSecCTP(int sock) {
 							free(trans);
 							trans = NULL;
 						}
-						debug_message("after step2 ret %d\n",ret);
+						debug_message("After step2 ret %d\n",ret);
 						break;
 					case 3: /* Authentication */ 
 						attempts = 0;
@@ -503,9 +483,9 @@ int processSecCTP(int sock) {
 							dtlsStep = DONE;
 						debug_message("End step3 ret %d\n",ret);
 						break;						
-					case 4: 
+					case 4: /* Pass back to webserver the authentication status */
 						debug_message("Final SecCTP step ret %d auth %d\n",ret,authorized);
-						//pass back to webserver the authentication status												
+								
 						if (authorized) {
 							ret = mq_send(mq_snd, AUTHORIZED, strlen(AUTHORIZED), 0);						
 												
@@ -537,10 +517,11 @@ int processSecCTP(int sock) {
 	//End transaction and clean up
 	if (secCTPstep > 1 && (dtlsStep> 1 || dtlsStep == DONE) ) {
 		secCTPstep = 1; //Reset outer switch condition 
-		close(sock);		
+		close(sock);	
+		sock = -1;	
 		gnutls_bye(session, GNUTLS_SHUT_WR);
-		//gnutls_deinit(session);			
-		debug_message("Socket closed and dtls session close\n");
+				
+		debug_message("Socket (%d) closed and dtls session close\n",sock);
 	}
 	
 	if (msg) {
@@ -658,9 +639,7 @@ static int pull_timeout_func(gnutls_transport_ptr_t ptr, unsigned int ms)
         if (ret <= 0)
                 return ret;
 
-        /* only report ok if the next message is from the peer we expect
-         * from 
-         */
+        /* only report ok if the next message is from the peer we expect */
         cli_addr_size = sizeof(cli_addr);
         ret =
             recvfrom(priv->fd, &c, 1, MSG_PEEK,

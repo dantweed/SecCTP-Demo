@@ -1,5 +1,3 @@
-//client.h
-
 #ifndef CLIENT_H_
 #define CLIENT_H_
 

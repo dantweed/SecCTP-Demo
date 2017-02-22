@@ -6,8 +6,6 @@
 #include <time.h>
 #include <errno.h>
 
-#define DELIM "\r\n" //Message line delimeter for convenience
-
 /** Generate correctly formatted SecCTP message
  * 
  * @param msg 		Pointer to buffer where the resulting message is stored

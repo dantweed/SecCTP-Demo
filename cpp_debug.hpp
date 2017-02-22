@@ -16,7 +16,7 @@ std::ostream& operator,(std::ostream& out, const T& t) {
   return out;
 }
 
-//overloaded version to handle all those special std::endl and others...
+//Overloaded version to extend coverage to std::endl, etc
 std::ostream& operator,(std::ostream& out, std::ostream&(*f)(std::ostream&)) {
   out << f;
   return out;
