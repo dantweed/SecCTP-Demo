@@ -7,7 +7,7 @@ This software is a demonstration of the ideas described in:
 
 * C. Davis, M. Maheswaran, and J. McAlear, "Secure Credential Transfer Protocol (SecCTP)," Draft IETF Specification, January 2015, unpublised.
 
-####Author
+####Developer
 * [Daniel Tweed](http://github.com/dantweed)
 
 ####Supervisor
